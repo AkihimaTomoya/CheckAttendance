@@ -1,0 +1,20 @@
+#python 3.10+
+Cython>=0.29.28
+cmake>=3.22.3    
+numpy==1.23.5
+torch
+torchvision
+tensorboardx
+tensorboard
+easydict
+opencv-python
+Pillow
+scipy
+tqdm
+scikit-learn
+matplotlib
+mxnet==2.0.0b1
+psutil
+mediapipe
+uvicorn[standard]
+fastapi
