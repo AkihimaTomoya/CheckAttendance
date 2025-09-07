@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Face Recognition Server (FastAPI)</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Face Recognition Stream</h1>
+
+        <!-- Container cho Video và Canvas Overlay -->
+        <div class="video-container">
+            <!-- Video này hiển thị stream trực tiếp từ camera -->
+            <video id="videoStream" autoplay muted playsinline></video>
+            <!-- Canvas này dùng để vẽ bounding box và tên lên trên video -->
+            <canvas id="canvasOverlay"></canvas>
+        </div>
+
+        <!-- Bảng điều khiển -->
+        <div class="controls-panel">
+            <div class="control-group">
+                <h3>Display Options</h3>
+                <div>
+                    <input type="checkbox" id="showBbox" checked>
+                    <label for="showBbox">Show Bounding Box</label>
+                </div>
+                <div>
+                    <input type="checkbox" id="showLabel" checked>
+                    <label for="showLabel">Show Name</label>
+                </div>
+            </div>
+
+            <div class="control-group">
+                <h3>Facebank</h3>
+                <button id="reloadFacebankBtn">Update Facebank</button>
+                <p id="facebankStatus" class="status-text"></p>
+            </div>
+
+            <div class="control-group">
+                <h3>Status</h3>
+                <p><strong>Connection:</strong> <span id="connectionStatus">Connecting...</span></p>
+                <p><strong>Detection:</strong> <span id="status">Initializing...</span></p>
+                <p><span id="lastUpdate"></span></p>
+            </div>
+        </div>
+    </div>
+    <!-- Tải file JS mới -->
+    <script src="/static/js/fastapi.js"></script>
+</body>
+</html>
