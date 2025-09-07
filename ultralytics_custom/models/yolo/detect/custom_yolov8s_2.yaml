@@ -1,0 +1,35 @@
+nc: 1  # number of classes
+depth_multiple: 0.33
+width_multiple: 0.50
+max_channels: 1024
+
+backbone:
+  - [-1, 1, Conv, [48, 3, 2]]           # 0-P1/2 (from 64 → 48)
+  - [-1, 1, Conv, [96, 3, 2]]           # 1-P2/4 (from 128 → 96)
+  - [-1, 3, C2f, [96, True]]            # 2 (was 4), keep shortcut
+  - [-1, 1, Conv, [192, 3, 2]]          # 3-P3/8 (from 256 → 192)
+  - [-1, 4, C2f, [192, True]]           # 4 (was 8), keep shortcut
+  - [-1, 1, Conv, [384, 3, 2]]          # 5-P4/16 (from 512 → 384)
+  - [-1, 4, C2f, [384, True]]           # 6 (was 8), keep shortcut
+  - [-1, 1, Conv, [768, 3, 2]]          # 7-P5/32 (from 1024 → 768)
+  - [-1, 3, C2f, [768, True]]           # 8 (was 4), keep shortcut
+  - [-1, 1, SPPF, [512, 5]]             # 9 (from 1024 → 512)
+
+head:
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]]     # 10
+  - [[-1, 6], 1, Concat, [1]]                      # 11
+  - [-1, 3, C2f, [384, True]]                      # 12
+
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]]     # 13
+  - [[-1, 4], 1, Concat, [1]]                      # 14
+  - [-1, 3, C2f, [192, True]]                      # 15
+
+  - [-1, 1, Conv, [192, 3, 2]]                     # 16
+  - [[-1, 12], 1, Concat, [1]]                     # 17
+  - [-1, 3, C2f, [384, True]]                      # 18
+
+  - [-1, 1, Conv, [384, 3, 2]]                     # 19
+  - [[-1, 9], 1, Concat, [1]]                      # 20
+  - [-1, 3, C2f, [768, True]]                      # 21
+
+  - [[15, 18, 21], 1, Detect, [nc]]                # 22

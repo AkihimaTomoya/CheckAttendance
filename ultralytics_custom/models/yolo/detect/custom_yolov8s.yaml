@@ -1,0 +1,36 @@
+nc: 1  # number of classes
+depth_multiple: 0.33
+width_multiple: 0.50
+max_channels: 1024
+
+backbone:
+  - [-1, 1, Conv, [32, 3, 2]]           # 0-P1/2 ↓ Channels
+  - [-1, 1, Conv, [64, 3, 2]]           # 1-P2/4 ↓ Channels
+  - [-1, 2, C2f, [64, False]]           # 2 ↓ Repeats, shortcut off
+  - [-1, 1, Conv, [128, 3, 2]]          # 3-P3/8 ↓ Channels
+  - [-1, 2, C2f, [128, False]]          # 4 ↓ Repeats, shortcut off
+  - [-1, 1, Conv, [256, 3, 2]]          # 5-P4/16 ↓ Channels
+  - [-1, 2, C2f, [256, False]]          # 6 ↓ Repeats
+  - [-1, 1, Conv, [512, 3, 2]]          # 7-P5/32 ↓ Channels
+  - [-1, 2, C2f, [512, False]]          # 8 ↓ Repeats
+  - [-1, 1, SPPF, [512, 5]]             # 9 ↓ Channels in SPPF
+
+
+head:
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]]     # 10
+  - [[-1, 6], 1, Concat, [1]]                      # 11
+  - [-1, 2, C2f, [256, False]]                     # 12 ↓ Channels, ↓ repeats
+
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]]     # 13
+  - [[-1, 4], 1, Concat, [1]]                      # 14
+  - [-1, 2, C2f, [128, False]]                     # 15 ↓ Channels, ↓ repeats
+
+  - [-1, 1, Conv, [128, 3, 2]]                     # 16 ↓ Channels
+  - [[-1, 12], 1, Concat, [1]]                     # 17
+  - [-1, 2, C2f, [256, False]]                     # 18 ↓ Channels, ↓ repeats
+
+  - [-1, 1, Conv, [256, 3, 2]]                     # 19 ↓ Channels
+  - [[-1, 9], 1, Concat, [1]]                      # 20
+  - [-1, 2, C2f, [512, False]]                     # 21 ↓ Channels, ↓ repeats
+
+  - [[15, 18, 21], 1, Detect, [nc]]                # 22
