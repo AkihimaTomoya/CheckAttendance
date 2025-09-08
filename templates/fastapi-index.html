@@ -3,12 +3,14 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>Face Recognition - Dual-Rate (FastAPI)</title>
+  <title>Face Recognition - Real-time (FastAPI)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
   <div class="container">
+    <h1>Face Recognition System</h1>
+
     <div id="videoContainer">
       <video id="videoStream" autoplay muted></video>
       <canvas id="canvasOverlay"></canvas>
@@ -30,6 +32,36 @@
       <div class="info-row">
         <span class="info-label">Connection:</span>
         <span id="connectionStatus">Connecting...</span>
+      </div>
+    </div>
+
+    <div class="controls-panel">
+      <h3>Display Settings</h3>
+      <div class="control-group">
+        <div class="control-item">
+          <input type="checkbox" id="showBbox" checked>
+          <label for="showBbox">Show Bounding Box</label>
+        </div>
+        <div class="control-item">
+          <input type="checkbox" id="showLabel" checked>
+          <label for="showLabel">Show Name & Confidence</label>
+        </div>
+      </div>
+
+      <h3>Facebank Management</h3>
+      <div class="control-group">
+        <button id="reloadFacebankBtn">Reload Facebank</button>
+        <span id="facebankStatus"></span>
+      </div>
+
+      <h3>Recognition Threshold</h3>
+      <div class="control-group">
+        <div class="control-item">
+          <label for="thresholdSlider">Threshold:</label>
+          <input type="range" id="thresholdSlider" min="0.5" max="2.0" step="0.1" value="1.4">
+          <span id="thresholdValue">1.4</span>
+        </div>
+        <button id="applyThreshold">Apply Threshold</button>
       </div>
     </div>
   </div>
