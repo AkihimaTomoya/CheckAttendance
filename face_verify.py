@@ -11,31 +11,61 @@ from Learner import face_learner
 from utils.utils_facebank import load_facebank, draw_box_name, prepare_facebank
 from face_detector import FaceDetector
 
+parser = argparse.ArgumentParser(description='Chạy ứng dụng nhận dạng khuôn mặt')
+parser.add_argument('-c', '--config', default='configs/infer_config.py', help='Đường dẫn đến file cấu hình.')
+parser.add_argument('-d', '--model-dir', type=str, default=None, help='Ghi đè thư mục model.')
+args = parser.parse_args()
+conf = get_config(args.config)
+yolo = FaceDetector()
+print('Face detector loaded')
+
+
+
+if args.model_dir:
+    print(f"[INFO] Ghi đè `config.output` bằng: '{args.model_dir}'")
+    conf.output = args.model_dir
+    dir_name = Path(args.model_dir).name
+    if 'res50_custom2' in dir_name:
+        conf.network = 'r50_custom_v2'
+    elif 'res50_custom' in dir_name:
+        conf.network = 'r50_custom_v1'
+    elif 'res50_fan' in dir_name:
+        conf.network = 'r50_fan_ffm'
+    elif 'r100' in dir_name:
+        conf.network = 'r100'
+    print(f"[INFO] Tự động đặt `config.network` thành: '{conf.network}'")
+
+print("\n--- Cấu hình Inference cuối cùng ---")
+print(f"Kiến trúc model: {conf.network}")
+print(f"Thư mục model:   {conf.output}")
+print(f"File trọng số:    {conf.model_file}")
+print(f"Ngưỡng nhận dạng: {conf.threshold}")
+print("------------------------------------\n")
+
+learner = face_learner(conf, inference=True)
+learner.threshold = conf.threshold
+
+model_file = conf.model_file if conf.device.type != 'cpu' else conf.cpu_model_file
+learner.load_state(conf, model_file)
+learner.model.eval()
+print('Learner loaded')
 
 class FaceVerificationApp:
-    def __init__(self, conf):
-        self.conf = conf
-        self.detector = FaceDetector()
-        print('Face detector loaded')
-
-        self.learner = face_learner(self.conf, inference=True)
-        self.learner.threshold = self.conf.threshold
-
-        model_file = self.conf.model_file if self.conf.device.type != 'cpu' else self.conf.cpu_model_file
-        self.learner.load_state(self.conf, model_file)
-        self.learner.model.eval()
-        print('Learner loaded')
-
+    def __init__(self):
+        self.height = 800
+        self.width = 800
+        self.image = None
+        self.last_recognition_results = {}  # {face_id: {"name": name, "confidence": conf}}
         self._load_initial_facebank()
 
     def _load_initial_facebank(self):
-        if self.conf.update_facebank:
+        if conf.update_facebank:
             print("Initial facebank update enabled. Preparing facebank...")
-            self.targets, self.names = prepare_facebank(self.conf, self.learner.model, self.detector, tta=self.conf.tta)
+            self.targets, self.names = prepare_facebank(conf, learner.model, yolo, tta=conf.tta)
             print('Facebank updated on startup.')
         else:
             print("Loading existing facebank...")
-            self.targets, self.names = load_facebank(self.conf)
+            self.targets, self.names = load_facebank(conf)
             print('Facebank loaded on startup.')
 
         if self.names:
@@ -43,22 +73,10 @@ class FaceVerificationApp:
         else:
             print('Facebank is empty.')
 
-    def _detect_and_align_faces(self, image):
-        try:
-            res = self.detector.align_multi(image, self.conf.face_limit, self.conf.min_face_size)
-            if res is None:
-                return None, None
-            bboxes, faces = res
-            return bboxes, faces
-        except Exception as e:
-            print(f"Error during face detection/alignment: {e}")
-            traceback.print_exc()
-            return None, None
-
     def reload_facebank(self):
         try:
             print("\n[API Request] Reloading facebank...")
-            self.targets, self.names = prepare_facebank(self.conf, self.learner.model, self.detector, tta=self.conf.tta)
+            self.targets, self.names = prepare_facebank(conf, learner.model, yolo, tta=conf.tta)
             print(f"Facebank reloaded successfully. Found {len(self.names)} identities: {self.names}\n")
             return True, f"Successfully reloaded. Found {len(self.names)} identities."
         except Exception as e:
@@ -66,198 +84,114 @@ class FaceVerificationApp:
             traceback.print_exc()
             return False, "An error occurred while reloading the facebank."
 
-    def detect_and_recognize(self, frame, recognize=False):
-        """
-        Thực hiện cả phát hiện và nhận dạng trong một lần để đảm bảo tính nhất quán.
-        :param frame: Khung hình đầu vào (OpenCV BGR)
-        :param recognize: Cờ để quyết định có chạy mô hình nhận dạng (chậm) hay không
-        :return: (list) face_locations, (dict) recognition_data
-        """
-        face_locations = []
-        recognition_data = {}
-
+    def process_frame(self, frame):
+        # Cũ
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        image = Image.fromarray(rgb_frame)
-
-        try:
-            # 1. Phát hiện và căn chỉnh khuôn mặt (CHỈ CHẠY 1 LẦN)
-            bboxes, faces = self._detect_and_align_faces(image)
-
-            if faces is None or len(faces) == 0:
-                return face_locations, recognition_data
-
-            # 2. Luôn trả về vị trí
-            for idx, bbox in enumerate(bboxes):
-                face_id = f"face_{idx}"
-                face_locations.append({
-                    "id": face_id,
-                    "bbox": (bbox[:-1].astype(int)).tolist()
-                })
-
-            # 3. Chỉ nhận dạng nếu cờ `recognize` là True
-            if recognize:
-                results, score = self.learner.infer(self.conf, faces, self.targets, self.conf.tta)
-
-                for idx, _ in enumerate(bboxes):
-                    face_id = f"face_{idx}"
-                    confidence = float('{:.2f}'.format(score[idx]))
-
-                    if confidence < 0.80:
-                        name = "Unknown"
-                    else:
-                        name = self.names.get(results[idx].item(), "Unknown")
-
-                    recognition_data[face_id] = {
-                        "name": name,
-                        "confidence": confidence
-                    }
-        except Exception as e:
-            print(f"Error in detect_and_recognize: {e}")
-            traceback.print_exc()
-
-        return face_locations, recognition_data
-
-    def process_frame(self, frame, show_bbox=True, show_label=True):
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        processed_frame = frame.copy()
         try:
             image = Image.fromarray(rgb_frame)
-            bboxes, faces = self._detect_and_align_faces(image)
-            if faces is None or len(faces) == 0:
-                return processed_frame
+            res = yolo.align_multi(image, conf.face_limit, conf.min_face_size)
+            print("YOLO result:", res)
+            if res is not None:
+                bboxes, faces = res
+                if faces is not None and len(faces) > 0:
+                    bboxes = bboxes[:, :-1].astype(int)
+                    bboxes = bboxes + [-1, -1, 1, 1]
+                    print("Bounding boxes:", bboxes)
+                    results, score = learner.infer(conf, faces, self.targets, args.tta)
+                    for idx, bbox in enumerate(bboxes):
 
-            results, score = self.learner.infer(self.conf, faces, self.targets, self.conf.tta)
-
-            for idx, bbox in enumerate(bboxes):
-                if show_bbox:
-                    bbox_coords = bbox[:-1].astype(int) + [-1, -1, 1, 1]
-                    display_text = ""
-                    if show_label:
-                        confidence = score[idx]
-                        if confidence < 0.80:
+                        if float('{:.2f}'.format(score[idx])) < .80:
                             name = "Unknown"
                         else:
-                            name = self.names.get(results[idx].item(), "Unknown")
-
-                        display_text = name
-                        if self.conf.show_score:
-                            display_text = f"{name} ({confidence:.2f})"
-                    processed_frame = draw_box_name(bbox_coords, display_text, processed_frame)
+                            name = names[results[idx] + 1]
+                        if args.score:
+                            rgb_frame = draw_box_name(bbox, f"{name}_{score[idx]:.2f}",
+                                                      rgb_frame)
+                        else:
+                            rgb_frame = draw_box_name(bbox, name, rgb_frame)
+                else:
+                    # Nếu không có khuôn mặt, vẽ thông báo
+                    cv2.putText(rgb_frame, "No face detected", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
+            else:
+                cv2.putText(rgb_frame, "No face detected", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
         except Exception as e:
-            print(f"Error processing frame: {e}")
-            traceback.print_exc()
+            print(e)
+            pass
+        processed_frame = cv2.cvtColor(rgb_frame, cv2.COLOR_RGB2BGR)
         return processed_frame
 
     def get_face_locations(self, frame):
         face_locations = []
+
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         try:
             image = Image.fromarray(rgb_frame)
-            bboxes, _ = self._detect_and_align_faces(image)
+            try:
+                res = yolo.align_multi(image, conf.face_limit, conf.min_face_size)
 
-            if bboxes is not None and len(bboxes) > 0:
-                for idx, bbox in enumerate(bboxes):
-                    face_id = f"face_{idx}"
-                    face_locations.append({
-                        "id": face_id,
-                        "bbox": (bbox[:-1].astype(int)).tolist()
-                    })
+                if res is not None:
+                    bboxes, faces = res
+
+                    # Debug
+                    print(
+                        f"MTCNN detection: bboxes shape: {bboxes.shape if bboxes is not None else None}, faces length: {len(faces) if faces is not None else None}")
+
+                    if faces is not None and len(faces) > 0 and bboxes is not None and bboxes.size > 0:
+                        bboxes = bboxes[:, :-1].astype(int)
+                        bboxes = bboxes + [-1, -1, 1, 1]
+
+                        # Chỉ trả về các tọa độ của bounding box
+                        for idx, bbox in enumerate(bboxes):
+                            face_id = f"face_{idx}"
+                            face_locations.append({
+                                "id": face_id,
+                                "bbox": bbox.tolist()  # Convert numpy array to list [x1, y1, x2, y2]
+                            })
+            except ValueError as e:
+                print(f"MTCNN error: {e} - skipping this frame")
         except Exception as e:
             print(f"Error in get_face_locations: {e}")
-            traceback.print_exc()
+            import traceback
+            traceback.print_exc()  # In ra stack trace đầy đủ
+
         return face_locations
 
     def recognize_faces(self, frame):
         recognition_data = {}
+
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         try:
             image = Image.fromarray(rgb_frame)
-            bboxes, faces = self._detect_and_align_faces(image)
+            res = yolo.align_multi(image, conf.face_limit, conf.min_face_size)
 
-            if faces is not None and len(faces) > 0:
-                results, score = self.learner.infer(self.conf, faces, self.targets, self.conf.tta)
+            if res is not None:
+                bboxes, faces = res
 
-                for idx, _ in enumerate(bboxes):
-                    face_id = f"face_{idx}"
-                    confidence = float('{:.2f}'.format(score[idx]))
+                if faces is not None and len(faces) > 0 and bboxes is not None and bboxes.size > 0:
+                    bboxes = bboxes[:, :-1].astype(int)
+                    bboxes = bboxes + [-1, -1, 1, 1]
+                    results, score = learner.infer(conf, faces, targets, args.tta)
 
-                    if confidence < 0.80:
+                    # Lưu trữ kết quả nhận dạng cho mỗi khuôn mặt
+                    for idx, bbox in enumerate(bboxes):
+                        face_id = f"face_{idx}"
                         name = "Unknown"
-                    else:
-                        name = self.names.get(results[idx].item(), "Unknown")
+                        confidence = float('{:.2f}'.format(score[idx]))
 
-                    recognition_data[face_id] = {
-                        "name": name,
-                        "confidence": confidence
-                    }
+                        if confidence >= 0.80:
+                            name = names[results[idx] + 1]
+
+                        recognition_data[face_id] = {
+                            "name": name,
+                            "confidence": confidence
+                        }
+
+                    # Cập nhật kết quả nhận dạng
+                    self.last_recognition_results = recognition_data
+                    print(self.last_recognition_results)
         except Exception as e:
             print(f"Error in recognize_faces: {e}")
-            traceback.print_exc()
+            import traceback
+            traceback.print_exc()  # In ra stack trace đầy đủ
+
         return recognition_data
-
-    def run_on_webcam(self):
-        cap = cv2.VideoCapture(0)
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-
-        if not cap.isOpened():
-            print("Error: Could not open video stream.")
-            return
-
-        print("\n--- Starting webcam feed ---")
-        print("Press 'q' to quit.")
-        print("Press 'r' to reload facebank.")
-        print("----------------------------\n")
-
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                print("Failed to grab frame.")
-                break
-
-            processed_frame = self.process_frame(frame)
-            cv2.imshow('Face Verification', processed_frame)
-
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord('q'):
-                print("'q' pressed, shutting down.")
-                break
-            elif key == ord('r'):
-                # NHẤN 'r' ĐỂ TẢI LẠI FACEBANK
-                self.reload_facebank()
-
-        cap.release()
-        cv2.destroyAllWindows()
-
-
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Chạy ứng dụng nhận dạng khuôn mặt')
-    parser.add_argument('-c', '--config', default='configs/infer_config.py', help='Đường dẫn đến file cấu hình.')
-    parser.add_argument('-d', '--model-dir', type=str, default=None, help='Ghi đè thư mục model.')
-    args = parser.parse_args()
-
-    config = get_config(args.config)
-
-    if args.model_dir:
-        print(f"[INFO] Ghi đè `config.output` bằng: '{args.model_dir}'")
-        config.output = args.model_dir
-        dir_name = Path(args.model_dir).name
-        if 'res50_custom2' in dir_name:
-            config.network = 'r50_custom_v2'
-        elif 'res50_custom' in dir_name:
-            config.network = 'r50_custom_v1'
-        elif 'res50_fan' in dir_name:
-            config.network = 'r50_fan_ffm'
-        elif 'r100' in dir_name:
-            config.network = 'r100'
-        print(f"[INFO] Tự động đặt `config.network` thành: '{config.network}'")
-
-    print("\n--- Cấu hình Inference cuối cùng ---")
-    print(f"Kiến trúc model: {config.network}")
-    print(f"Thư mục model:   {config.output}")
-    print(f"File trọng số:    {config.model_file}")
-    print(f"Ngưỡng nhận dạng: {config.threshold}")
-    print("------------------------------------\n")
-
-    app = FaceVerificationApp(config)
-    app.run_on_webcam()
