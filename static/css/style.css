@@ -1,134 +1,105 @@
-/* static/css/style.css */
-
 body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    margin: 0;
-    padding: 20px;
-    background-color: #f0f2f5;
-    color: #333;
-    display: flex;
-    justify-content: center;
-    align-items: flex-start;
-}
-
+      font-family: Inter, sans-serif;
+      margin: 0;
+      padding: 0;
+      background-color: #f5f5f5;
+    }
 .container {
-    width: 100%;
-    max-width: 1320px;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 20px;
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 20px;
 }
-
-h1 {
-    width: 100%;
-    text-align: center;
-    color: #1c1e21;
-    margin-bottom: 20px;
+#videoContainer {
+  position: relative;
+  width: 640px;
+  height: 480px;
+  background-color: #000;
+  margin: 0 auto;
+  overflow: hidden;
+  border-radius: 8px;
+  box-shadow: 0 4px 8px rgba(0,0,0,0.1);
 }
-
-.video-container {
-    position: relative;
-    flex-grow: 1;
-    min-width: 640px;
-    background-color: #000;
-    border-radius: 8px;
-    overflow: hidden;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-    /* Giữ tỷ lệ 16:9 */
-    aspect-ratio: 16 / 9;
-}
-
-#videoStream, #canvasOverlay {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-}
-
 #videoStream {
-    z-index: 1;
-    object-fit: cover;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
-
 #canvasOverlay {
-    z-index: 2;
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
 }
-
-.controls-panel {
-    width: 320px;
-    min-width: 300px;
-    background-color: white;
-    border-radius: 8px;
-    padding: 20px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-    display: flex;
-    flex-direction: column;
-    gap: 25px;
+.info-panel, .controls-panel {
+  background-color: white;
+  border-radius: 8px;
+  padding: 15px;
+  margin-top: 20px;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
 }
-
+.info-row {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.info-label {
+  font-weight: bold;
+  color: #555;
+}
+#status {
+  font-weight: bold;
+  color: #4c7faf;
+}
+.dual-rate-info {
+  position: absolute;
+  bottom: 10px;
+  left: 10px;
+  background-color: rgba(0,0,0,0.7);
+  color: white;
+  padding: 5px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  max-width: 300px;
+}
+.dual-rate-info p {
+  margin: 5px 0;
+}
+.controls-panel h3 {
+  margin-top: 0;
+  color: #333;
+}
 .control-group {
-    border-bottom: 1px solid #e0e0e0;
-    padding-bottom: 20px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 15px;
+  align-items: center;
 }
-
-.control-group:last-child {
-    border-bottom: none;
-    padding-bottom: 0;
+.control-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
-
-.control-group h3 {
-    margin-top: 0;
-    margin-bottom: 15px;
-    font-size: 1.1em;
-    color: #050505;
+.control-item label {
+  font-weight: bold;
+  color: #555;
 }
-
-.control-group div {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-bottom: 10px;
+.control-item input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
 }
-
-.control-group p {
-    margin: 5px 0;
-    font-size: 0.9em;
-    color: #65676b;
+#apply-settings {
+  background-color: #4c7faf;
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: bold;
+  transition: background-color 0.3s;
 }
-
-.control-group p strong {
-    color: #333;
-}
-
-#connectionStatus, #status {
-    font-weight: bold;
-}
-
-button {
-    background-color: #1877f2;
-    color: white;
-    border: none;
-    padding: 10px 15px;
-    border-radius: 6px;
-    cursor: pointer;
-    font-weight: bold;
-    transition: background-color 0.3s;
-    width: 100%;
-}
-
-button:hover {
-    background-color: #166fe5;
-}
-
-input[type="checkbox"] {
-    width: 18px;
-    height: 18px;
-    cursor: pointer;
-}
-
-.status-text {
-    margin-top: 10px;
-    font-size: 0.9em;
-    font-weight: bold;
+#apply-settings:hover {
+  background-color: #3a6084;
 }
