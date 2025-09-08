@@ -15,7 +15,7 @@ import traceback
 from face_verify import FaceVerificationApp
 from utils.utils_config import get_config
 
-# --- PHẦN KHỞI TẠO CẤU HÌNH (Giữ nguyên từ file mới của bạn) ---
+# --- PHẦN KHỞI TẠO CẤU HÌNH ---
 parser = argparse.ArgumentParser(description="FastAPI Face Recognition Server")
 parser.add_argument('-c', '--config', default='configs/infer_config.py',
                     help='Đường dẫn đến file cấu hình cho inference.')
@@ -49,9 +49,9 @@ app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Khởi tạo ứng dụng nhận dạng
-face_verification_app = FaceVerificationApp(config)
+face_verification_app = FaceVerificationApp()
 
-# --- CÁC API ENDPOINT (Giữ nguyên) ---
+# --- CÁC API ENDPOINT ---
 ui_config = {"show_bbox": True, "show_label": True}
 
 
@@ -60,13 +60,29 @@ class UIConfig(BaseModel):
     show_label: bool
 
 
+class ThresholdConfig(BaseModel):
+    threshold: float
+
+
 @app.post("/config")
 async def update_ui_config(new_config: UIConfig):
     global ui_config
     ui_config.update(new_config.dict())
     print(f"Cập nhật cấu hình UI: {ui_config}")
-    # Gửi cấu hình mới đến tất cả các client đang kết nối (tùy chọn)
     return {"status": "success", "config": ui_config}
+
+
+@app.post("/threshold")
+async def update_threshold(threshold_config: ThresholdConfig):
+    old_threshold = face_verification_app.conf.threshold
+    face_verification_app.conf.threshold = threshold_config.threshold
+    print(f"Threshold updated from {old_threshold} to {threshold_config.threshold}")
+    return {"status": "success", "old_threshold": old_threshold, "new_threshold": threshold_config.threshold}
+
+
+@app.get("/threshold")
+async def get_threshold():
+    return {"threshold": face_verification_app.conf.threshold}
 
 
 @app.post("/reload-facebank")
@@ -84,46 +100,68 @@ async def read_root():
         return HTMLResponse(content=f.read())
 
 
-# --- WEBSOCKET ENDPOINT (Cập nhật với logic mới) ---
+# Serve the HTML page
+@app.get("/")
+async def get_index():
+    try:
+        with open("templates/fastapi-index.html", "r") as f:
+            content = f.read()
+            return HTMLResponse(content=content)
+    except FileNotFoundError:
+        return HTMLResponse(content="<html><body><h1>Error: Template file not found</h1></body></html>")
+
+last_recognition_time = 0
+recognition_interval = 2
+# WebSocket endpoint
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
-    print("Client đã kết nối.")
-    await websocket.send_json({"type": "config", "data": ui_config})
+    active_connections.append(websocket)
 
-    last_recognition_time = 0
-    recognition_interval = 2  # Giây
+    # Send configuration
+    await websocket.send_json({"type": "config", "data": config})
 
     try:
         while True:
             data = await websocket.receive_text()
-            img_data = base64.b64decode(data.split(',')[1])
-            np_arr = np.frombuffer(img_data, np.uint8)
-            frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-
-            current_time = time.time()
-            # Quyết định xem có cần chạy nhận dạng trong lần này không
-            should_recognize = (current_time - last_recognition_time) >= recognition_interval
-
-            # Gọi hàm tích hợp mới
-            face_locations, recognition_data = face_verification_app.detect_and_recognize(
-                frame,
-                recognize=should_recognize
-            )
-
-            # Luôn gửi vị trí
-            await websocket.send_json({"type": "face_locations", "data": face_locations})
-
-            # Chỉ gửi dữ liệu nhận dạng khi nó được thực hiện
-            if should_recognize:
-                await websocket.send_json({"type": "recognition_data", "data": recognition_data})
-                last_recognition_time = current_time
-
+            await process_frame(websocket, data)
     except WebSocketDisconnect:
-        print("Client đã ngắt kết nối.")
+        if websocket in active_connections:
+            active_connections.remove(websocket)
+        print("Client disconnected")
     except Exception as e:
-        print(f"Lỗi WebSocket: {e}")
-        traceback.print_exc()
+        print(f"WebSocket error: {e}")
+        if websocket in active_connections:
+            active_connections.remove(websocket)
+
+
+# Process video frames
+async def process_frame(websocket: WebSocket, data: str):
+    global last_recognition_time
+    current_time = time.time()
+
+    try:
+        # Decode the image
+        if ',' in data:
+            _, encoded = data.split(',', 1)
+        else:
+            encoded = data
+        img_data = base64.b64decode(encoded)
+        np_arr = np.frombuffer(img_data, np.uint8)
+        frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+
+        # Face locations update - always
+        face_locations = camera.get_face_locations(frame)
+        await websocket.send_json({"type": "face_locations", "data": face_locations})
+
+        # Recognition update - every 2 seconds
+        if current_time - last_recognition_time >= recognition_interval:
+            recognition_data = camera.recognize_faces(frame)
+            await websocket.send_json({"type": "recognition_data", "data": recognition_data})
+            last_recognition_time = current_time
+
+    except Exception as e:
+        print(f"Frame processing error: {e}")
 
 
 if __name__ == "__main__":
