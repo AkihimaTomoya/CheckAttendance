@@ -1,4 +1,4 @@
-// static/js/fastapi-client.js
+// static/js/fastapi.js
 
 document.addEventListener('DOMContentLoaded', () => {
     // --- Lấy các phần tử HTML ---
@@ -12,6 +12,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const facebankStatus = document.getElementById('facebankStatus');
     const lastUpdateEl = document.getElementById('lastUpdate');
     const statusEl = document.getElementById('status');
+    const thresholdSlider = document.getElementById('thresholdSlider');
+    const thresholdValue = document.getElementById('thresholdValue');
+    const applyThresholdBtn = document.getElementById('applyThreshold');
 
     // --- Biến trạng thái ---
     let ws = null;
@@ -31,6 +34,7 @@ document.addEventListener('DOMContentLoaded', () => {
         ws.onopen = () => {
             connectionStatusEl.textContent = 'Connected';
             connectionStatusEl.style.color = '#4caf50';
+            console.log('WebSocket connected successfully');
         };
 
         ws.onclose = () => {
@@ -42,6 +46,7 @@ document.addEventListener('DOMContentLoaded', () => {
         ws.onerror = (error) => {
             console.error('WebSocket error:', error);
             connectionStatusEl.textContent = 'Connection Error';
+            connectionStatusEl.style.color = '#f44336';
         };
 
         ws.onmessage = (event) => {
@@ -72,22 +77,29 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // 3. Lấy stream từ camera và thiết lập canvas
     function setupCameraAndCanvas() {
-        navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } })
-            .then(stream => {
-                video.srcObject = stream;
-                video.play();
-                video.addEventListener('loadedmetadata', () => {
-                    // Đặt kích thước canvas bằng kích thước hiển thị của video
-                    canvasOverlay.width = video.clientWidth;
-                    canvasOverlay.height = video.clientHeight;
-                    startAnimationLoop();
-                    sendFramesToServer();
-                });
-            })
-            .catch(err => {
-                console.error("Camera access error:", err);
-                alert("Could not access the camera. Please check permissions.");
+        navigator.mediaDevices.getUserMedia({ 
+            video: { 
+                width: { ideal: 1280 }, 
+                height: { ideal: 720 } 
+            } 
+        })
+        .then(stream => {
+            video.srcObject = stream;
+            video.play();
+            video.addEventListener('loadedmetadata', () => {
+                // Đặt kích thước canvas bằng kích thước hiển thị của video
+                canvasOverlay.width = video.clientWidth;
+                canvasOverlay.height = video.clientHeight;
+                startAnimationLoop();
+                sendFramesToServer();
             });
+        })
+        .catch(err => {
+            console.error("Camera access error:", err);
+            statusEl.textContent = "Camera access denied";
+            statusEl.style.color = '#f44336';
+            alert("Could not access the camera. Please check permissions.");
+        });
     }
 
     // 4. Vòng lặp vẽ lên canvas (Animation)
@@ -113,11 +125,15 @@ document.addEventListener('DOMContentLoaded', () => {
             ? `Detected ${faceLocations.length} face(s)`
             : "No faces detected";
 
-        // --- BẮT ĐẦU LOGIC SỬA LỖI BBOX ---
+        if (faceLocations.length === 0) {
+            statusEl.style.color = '#666';
+        } else {
+            statusEl.style.color = '#4c7faf';
+        }
+
         // Tính toán tỉ lệ giữa kích thước video gốc và kích thước hiển thị
         const scaleX = video.clientWidth / video.videoWidth;
         const scaleY = video.clientHeight / video.videoHeight;
-        // --- KẾT THÚC LOGIC SỬA LỖI BBOX ---
 
         faceLocations.forEach(face => {
             const [x1, y1, x2, y2] = face.bbox;
@@ -150,9 +166,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 ctx.font = '16px Arial';
                 const textWidth = ctx.measureText(displayText).width;
 
+                // Vẽ nền cho text
                 ctx.fillStyle = boxColor;
                 ctx.fillRect(scaledX1 - 1, scaledY1 - 22, textWidth + 10, 22);
 
+                // Vẽ text
                 ctx.fillStyle = 'white';
                 ctx.fillText(displayText, scaledX1 + 5, scaledY1 - 5);
             }
@@ -161,61 +179,188 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // 6. Gửi frame video đến server
     function sendFramesToServer() {
-        if (!ws || ws.readyState !== WebSocket.OPEN || processingFrame) {
-            setTimeout(sendFramesToServer, 100); // Thử lại sau nếu chưa sẵn sàng
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+            setTimeout(sendFramesToServer, 100);
+            return;
+        }
+
+        if (processingFrame) {
+            setTimeout(sendFramesToServer, 50);
             return;
         }
 
         processingFrame = true;
 
-        const captureCanvas = document.createElement('canvas');
-        captureCanvas.width = video.videoWidth;
-        captureCanvas.height = video.videoHeight;
-        captureCanvas.getContext('2d').drawImage(video, 0, 0);
+        try {
+            const captureCanvas = document.createElement('canvas');
+            captureCanvas.width = video.videoWidth;
+            captureCanvas.height = video.videoHeight;
+            const captureCtx = captureCanvas.getContext('2d');
+            captureCtx.drawImage(video, 0, 0);
 
-        const dataURL = captureCanvas.toDataURL('image/jpeg', 0.8); // Chất lượng 80%
-        ws.send(dataURL);
+            const dataURL = captureCanvas.toDataURL('image/jpeg', 0.8);
+            ws.send(dataURL);
+        } catch (error) {
+            console.error('Error sending frame:', error);
+        }
 
         setTimeout(() => {
             processingFrame = false;
-            sendFramesToServer(); // Lên lịch gửi frame tiếp theo
+            sendFramesToServer();
         }, 150); // Gửi khoảng 6-7 frame/giây
     }
 
-    // 7. Cập nhật cấu hình UI
-    async function updateConfig() {
-        const newConfig = {
-            show_bbox: showBboxCheckbox.checked,
-            show_label: showLabelCheckbox.checked
-        };
-        await fetch('/config', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(newConfig)
+    // 7. Xử lý sự kiện checkbox hiển thị
+    function setupEventHandlers() {
+        // Xử lý checkbox show/hide bounding box
+        showBboxCheckbox.addEventListener('change', async () => {
+            const newConfig = {
+                show_bbox: showBboxCheckbox.checked,
+                show_label: showLabelCheckbox.checked
+            };
+
+            try {
+                const response = await fetch('/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(newConfig)
+                });
+
+                if (response.ok) {
+                    config = newConfig;
+                    console.log('Config updated:', config);
+                } else {
+                    console.error('Failed to update config');
+                }
+            } catch (error) {
+                console.error('Error updating config:', error);
+            }
         });
-        // Cập nhật config cục bộ ngay lập tức để UI phản hồi nhanh
-        config = newConfig;
+
+        // Xử lý checkbox show/hide label
+        showLabelCheckbox.addEventListener('change', async () => {
+            const newConfig = {
+                show_bbox: showBboxCheckbox.checked,
+                show_label: showLabelCheckbox.checked
+            };
+
+            try {
+                const response = await fetch('/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(newConfig)
+                });
+
+                if (response.ok) {
+                    config = newConfig;
+                    console.log('Config updated:', config);
+                } else {
+                    console.error('Failed to update config');
+                }
+            } catch (error) {
+                console.error('Error updating config:', error);
+            }
+        });
+
+        // Xử lý nút reload facebank
+        reloadFacebankBtn.addEventListener('click', async () => {
+            reloadFacebankBtn.disabled = true;
+            reloadFacebankBtn.textContent = 'Reloading...';
+            facebankStatus.textContent = 'Processing...';
+            facebankStatus.style.color = '#ff9800';
+
+            try {
+                const response = await fetch('/reload-facebank', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+
+                const result = await response.json();
+
+                if (result.status === 'success') {
+                    facebankStatus.textContent = result.message;
+                    facebankStatus.style.color = '#4caf50';
+                } else {
+                    facebankStatus.textContent = `Error: ${result.message}`;
+                    facebankStatus.style.color = '#f44336';
+                }
+            } catch (error) {
+                console.error('Error reloading facebank:', error);
+                facebankStatus.textContent = 'Network error occurred';
+                facebankStatus.style.color = '#f44336';
+            } finally {
+                reloadFacebankBtn.disabled = false;
+                reloadFacebankBtn.textContent = 'Reload Facebank';
+            }
+        });
+
+        // Xử lý slider threshold
+        thresholdSlider.addEventListener('input', () => {
+            thresholdValue.textContent = thresholdSlider.value;
+        });
+
+        // Xử lý nút apply threshold
+        applyThresholdBtn.addEventListener('click', async () => {
+            const threshold = parseFloat(thresholdSlider.value);
+
+            try {
+                const response = await fetch('/threshold', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ threshold: threshold })
+                });
+
+                const result = await response.json();
+
+                if (result.status === 'success') {
+                    console.log(`Threshold updated from ${result.old_threshold} to ${result.new_threshold}`);
+                    alert(`Threshold updated to ${result.new_threshold}`);
+                } else {
+                    console.error('Failed to update threshold');
+                    alert('Failed to update threshold');
+                }
+            } catch (error) {
+                console.error('Error updating threshold:', error);
+                alert('Error updating threshold');
+            }
+        });
     }
 
-    // 8. Cập nhật Facebank
-    async function reloadFacebank() {
-        facebankStatus.textContent = 'Updating...';
-        facebankStatus.style.color = '#2196F3';
-        const response = await fetch('/reload-facebank', { method: 'POST' });
-        const result = await response.json();
+    // 8. Tải threshold hiện tại từ server
+    async function loadCurrentThreshold() {
+        try {
+            const response = await fetch('/threshold');
+            const result = await response.json();
 
-        facebankStatus.textContent = result.message;
-        facebankStatus.style.color = result.status === 'success' ? '#4caf50' : '#f44336';
-
-        setTimeout(() => { facebankStatus.textContent = ''; }, 6000);
+            if (result.threshold) {
+                thresholdSlider.value = result.threshold;
+                thresholdValue.textContent = result.threshold;
+                console.log('Current threshold loaded:', result.threshold);
+            }
+        } catch (error) {
+            console.error('Error loading current threshold:', error);
+        }
     }
 
-    // --- GẮN EVENT LISTENERS ---
-    showBboxCheckbox.addEventListener('change', updateConfig);
-    showLabelCheckbox.addEventListener('change', updateConfig);
-    reloadFacebankBtn.addEventListener('click', reloadFacebank);
+    // --- KHỞI TẠO ỨNG DỤNG ---
+    function init() {
+        console.log('Initializing Face Recognition App...');
 
-    // --- KHỞI ĐỘNG ---
-    setupCameraAndCanvas();
-    connectWebSocket();
+        // Thiết lập camera và canvas
+        setupCameraAndCanvas();
+
+        // Thiết lập các event handlers
+        setupEventHandlers();
+
+        // Tải threshold hiện tại
+        loadCurrentThreshold();
+
+        // Kết nối WebSocket
+        connectWebSocket();
+
+        console.log('Face Recognition App initialized successfully!');
+    }
+
+    // Bắt đầu ứng dụng
+    init();
 });
