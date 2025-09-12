@@ -245,7 +245,7 @@ def test(data_set, backbone, batch_size, nfolds=10):
         ba = 0
         while ba < data.shape[0]:
             bb = min(ba + batch_size, data.shape[0])
-            _data = data[ba:bb].to(device)  # Gửi dữ liệu đến GPU/CPU
+            _data = data[ba:bb].to(device)
 
             time0 = datetime.datetime.now()
             # Chuẩn hóa dữ liệu
@@ -275,16 +275,16 @@ def test(data_set, backbone, batch_size, nfolds=10):
 
     embeddings_no_flip = embeddings_list[0].copy()
     embeddings_no_flip = sklearn.preprocessing.normalize(embeddings_no_flip)
-    _, _, accuracy, _, _, _, eer1 = evaluate(embeddings_no_flip, issame_list, nrof_folds=nfolds)
+    _, _, accuracy, _, _, _, eer1, _ = evaluate(embeddings_no_flip, issame_list, nrof_folds=nfolds)
     acc1, std1 = np.mean(accuracy), np.std(accuracy)
 
     embeddings_with_flip = embeddings_list[0] + embeddings_list[1]
     embeddings_with_flip = sklearn.preprocessing.normalize(embeddings_with_flip)
     print(embeddings_with_flip.shape)
     print('infer time', time_consumed)
-    _, _, accuracy, val, val_std, far, eer2 = evaluate(embeddings_with_flip, issame_list, nrof_folds=nfolds)
+    _, _, accuracy, val, val_std, far, eer2, best_thresholds = evaluate(embeddings_with_flip, issame_list, nrof_folds=nfolds)
     acc2, std2 = np.mean(accuracy), np.std(accuracy)
-    return acc1, std1, acc2, std2, _xnorm, embeddings_list, eer2
+    return acc1, std1, acc2, std2, _xnorm, embeddings_list, eer2, best_thresholds.mean()
 
 
 def dumpR(data_set,
@@ -383,6 +383,8 @@ if __name__ == '__main__':
 
     ver_list = []
     ver_name_list = []
+    best_thresholds_list = []
+
     for name in args.target.split(','):
         path = os.path.join(args.data_dir, name + ".bin")
         if os.path.exists(path):
@@ -395,8 +397,9 @@ if __name__ == '__main__':
 
     for i in range(len(ver_list)):
         results = []
+        best_thresholds_file = []
         for model in nets:
-            acc1, std1, acc2, std2, xnorm, embeddings_list, eer = test(
+            acc1, std1, acc2, std2, xnorm, embeddings_list, eer, best_thresholds = test(
                 ver_list[i], model, args.batch_size, args.nfolds)
 
             embeddings = embeddings_list[0] + embeddings_list[1]
@@ -406,6 +409,7 @@ if __name__ == '__main__':
                                               embeddings[0::2], embeddings[1::2],
                                               np.asarray(ver_list[i][1]), 1e-3, nrof_folds=args.nfolds)
 
+            print('[%s]Best threshold: %f' % (ver_name_list[i], best_thresholds))
             print('[%s]XNorm: %f' % (ver_name_list[i], xnorm))
             print('[%s]Accuracy: %1.5f+-%1.5f' % (ver_name_list[i], acc1, std1))
             print('[%s]Accuracy-Flip: %1.5f+-%1.5f' % (ver_name_list[i], acc2, std2))
@@ -413,8 +417,16 @@ if __name__ == '__main__':
             print('[%s]EER: %1.4f%%' % (ver_name_list[i], eer * 100))
 
             results.append(acc2)
+            best_thresholds_file.append(best_thresholds)
+
+        mean_best_thresholds = np.mean(best_thresholds_file)
+        best_thresholds_list.append(mean_best_thresholds)
 
         if results:
             print('Max of [%s] is %1.5f' % (ver_name_list[i], np.max(results)))
+            print(f"Mean of best thresholds for [{ver_name_list[i]}]: {mean_best_thresholds}")
         else:
             print(f"Could not get results for {ver_name_list[i]}")
+
+    overall_mean_best_thresholds = np.mean(best_thresholds_list)
+    print(f"Overall mean of best thresholds: {overall_mean_best_thresholds}")
