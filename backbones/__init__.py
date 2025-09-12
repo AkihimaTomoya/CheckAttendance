@@ -39,16 +39,26 @@ def get_model(name, **kwargs):
     # ----------------------------------------------------------------
     # 3. IResNet with FAN Layer (from iresnet_fan.py)
     # ----------------------------------------------------------------
+
     elif name == "r50_fan":
-        # Phiên bản KHÔNG có Fourier Feature Mapping (đầu vào 3 kênh)
+
         from .iresnet_fan import iresnet50
+
         return iresnet50(pretrained=False, use_ffm=False, use_fan=True, **kwargs)
 
+
     elif name == "r50_fan_ffm":
-        # Phiên bản CÓ Fourier Feature Mapping (đầu vào 128 kênh)
-        # Đây là phiên bản bạn cần để nạp checkpoint.
+
         from .iresnet_fan import iresnet50
+
         return iresnet50(pretrained=False, use_ffm=True, use_fan=True, **kwargs)
+
+
+    elif name == "r50_ffm":
+
+        from .iresnet_fan import iresnet50
+
+        return iresnet50(pretrained=False, use_ffm=True, use_fan=False, **kwargs)
 
     # ----------------------------------------------------------------
     # 4. Specialized IResNet Models (from iresnet2060.py)
