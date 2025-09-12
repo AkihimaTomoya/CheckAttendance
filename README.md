@@ -1,6 +1,7 @@
-# Face Recognition Realtime Server
+# Face Recognition Realtime
 
 This project provides a FastAPI-based server for **real-time face detection and recognition** with webcam streaming and a modern web UI.
+It uses a custom YOLOv8s model for face detection and ArcFace for recognition, enhanced with a new preprocessing method.
 
 ---
 
