@@ -1,366 +1,198 @@
-// static/js/fastapi.js
-
 document.addEventListener('DOMContentLoaded', () => {
-    // --- Lấy các phần tử HTML ---
-    const video = document.getElementById('videoStream');
-    const canvasOverlay = document.getElementById('canvasOverlay');
-    const ctx = canvasOverlay.getContext('2d');
-    const connectionStatusEl = document.getElementById('connectionStatus');
-    const showBboxCheckbox = document.getElementById('showBbox');
-    const showLabelCheckbox = document.getElementById('showLabel');
-    const reloadFacebankBtn = document.getElementById('reloadFacebankBtn');
-    const facebankStatus = document.getElementById('facebankStatus');
-    const lastUpdateEl = document.getElementById('lastUpdate');
-    const statusEl = document.getElementById('status');
-    const thresholdSlider = document.getElementById('thresholdSlider');
-    const thresholdValue = document.getElementById('thresholdValue');
-    const applyThresholdBtn = document.getElementById('applyThreshold');
+  const $ = id => document.getElementById(id);
 
-    // --- Biến trạng thái ---
-    let ws = null;
-    let processingFrame = false;
-    let faceLocations = [];  // Cập nhật liên tục từ server
-    let recognitionData = {}; // Cập nhật định kỳ từ server
-    let config = { show_bbox: true, show_label: true }; // Cấu hình mặc định
+  const video = $('videoStream');
+  const canvas = $('canvasOverlay');
+  const ctx = canvas.getContext('2d');
 
-    // --- CÁC HÀM XỬ LÝ ---
+  const connectionStatus = $('connectionStatus');
+  const serverThrEl = $('serverThreshold');
+  const faceCountEl = $('faceCount');
+  const statusLine = $('status');
 
-    // 1. Kết nối WebSocket
-    function connectWebSocket() {
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${protocol}//${window.location.host}/ws`;
-        ws = new WebSocket(wsUrl);
+  const stopBtn = $('stopBtn');
+  const reloadFacebankBtn = $('reloadFacebankBtn');
 
-        ws.onopen = () => {
-            connectionStatusEl.textContent = 'Connected';
-            connectionStatusEl.style.color = '#4caf50';
-            console.log('WebSocket connected successfully');
-        };
+  const thrRange = $('thrRange'), thrNum = $('thrNum'), applyThrBtn = $('applyThrBtn');
+  const ttaChk = $('ttaChk'), top1Chk = $('top1Chk'), refreshRuntimeBtn = $('refreshRuntimeBtn');
 
-        ws.onclose = () => {
-            connectionStatusEl.textContent = 'Disconnected. Retrying...';
-            connectionStatusEl.style.color = '#f44336';
-            setTimeout(connectWebSocket, 3000);
-        };
+  const resultPre = $('resultPre'), runtimePre = $('runtimePre');
+  const serverDebugPre = $('serverDebugPre'), facebankDebugPre = $('facebankDebugPre');
+  const refreshDebugBtn = $('refreshDebugBtn'), refreshFacebankBtn = $('refreshFacebankBtn');
 
-        ws.onerror = (error) => {
-            console.error('WebSocket error:', error);
-            connectionStatusEl.textContent = 'Connection Error';
-            connectionStatusEl.style.color = '#f44336';
-        };
+  let ws = null, streaming = false, sendTimer = null;
+  let lastLocs = [], recogMap = {}, cfg = { threshold: null };
+  // kích thước nguồn dùng để scale bbox -> canvas hiển thị
+  let srcW = null, srcH = null;
 
-        ws.onmessage = (event) => {
-            const message = JSON.parse(event.data);
-            handleWebSocketMessage(message);
-        };
+  const setPill = (t,c) => { connectionStatus.textContent=t; connectionStatus.className='pill '+(c||''); };
+  const setStatus = (t) => { statusLine.textContent = t; };
+  const fetchJSON = async (u,o={}) => (await fetch(u,o)).json();
+
+  function fitCanvas(){
+    const w = video.videoWidth || video.clientWidth || 800;
+    const h = video.videoHeight|| video.clientHeight|| 600;
+    canvas.width = w; canvas.height = h;
+  }
+
+  function drawOverlay(){
+    if (!streaming) return;
+    fitCanvas();
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+
+    const faces = Array.isArray(lastLocs) ? lastLocs : [];
+    faceCountEl.textContent = faces.length;
+    setStatus(faces.length>0 ? `Nhận diện ${faces.length} khuôn mặt` : 'Chưa phát hiện khuôn mặt');
+
+    const sw = (typeof srcW==='number' && srcW>0) ? srcW : canvas.width;
+    const sh = (typeof srcH==='number' && srcH>0) ? srcH : canvas.height;
+    const sx = canvas.width / sw;
+    const sy = canvas.height/ sh;
+
+    faces.forEach(loc => {
+      let [x1,y1,x2,y2] = loc.bbox;
+      // scale bbox theo kích thước hiển thị
+      x1 = Math.round(x1*sx); y1 = Math.round(y1*sy);
+      x2 = Math.round(x2*sx); y2 = Math.round(y2*sy);
+
+      const rec = recogMap[loc.id] || {};
+      const useTop1 = !!top1Chk.checked;
+      const name = (useTop1 && rec.name_top1) ? rec.name_top1 : (rec.name || 'Unknown');
+      const dist = (typeof rec.distance === 'number') ? rec.distance : null;
+      const thr  = (typeof cfg.threshold === 'number') ? cfg.threshold : (rec.threshold || 1.56);
+      const pass = (typeof dist === 'number') ? (dist < thr) : false;
+
+      // Dùng đúng 3 tông: pass = #198cf0, not-pass = hsl(201,97%,72%), text = #fff
+      const color = pass ? '#198cf0' : 'hsl(201, 97%, 72%)';
+
+      ctx.lineWidth = 2; ctx.strokeStyle = color;
+      ctx.strokeRect(x1, y1, x2-x1, y2-y1);
+
+      const label = `${name} — d=${dist==null?'—':dist.toFixed(3)}`;
+      ctx.font = '14px ui-sans-serif, system-ui';
+      const tw = ctx.measureText(label).width;
+      const y = Math.max(0, y1-22);
+      ctx.fillStyle = color; ctx.fillRect(x1, y, tw+10, 22);
+      ctx.fillStyle = '#fff'; ctx.fillText(label, x1+5, y+16);
+    });
+
+    requestAnimationFrame(drawOverlay);
+  }
+
+  async function startCamera(){
+    if (streaming) return;
+    try{
+      const stream = await navigator.mediaDevices.getUserMedia({ video:{width:{ideal:1280}, height:{ideal:720}}, audio:false });
+      video.srcObject = stream; await video.play();
+      streaming = true; setPill('Đã kết nối','ok'); setStatus('Camera đã bật');
+      connectWS(); kickLoops(); requestAnimationFrame(drawOverlay);
+    }catch(e){
+      setPill('Lỗi camera','err'); setStatus('Không mở được camera. Hãy cấp quyền.');
     }
+  }
+  function stopCamera(){
+    streaming = false;
+    if (sendTimer) { clearInterval(sendTimer); sendTimer=null; }
+    if (ws){ try{ ws.close(); }catch{} ws=null; }
+    const so = video.srcObject; if (so){ so.getTracks().forEach(t=>t.stop()); video.srcObject=null; }
+    setPill('Đã tắt','warn'); setStatus('Camera đã tắt');
+    faceCountEl.textContent = '0'; lastLocs=[]; recogMap={}; ctx.clearRect(0,0,canvas.width,canvas.height);
+  }
+  function kickLoops(){
+    if (sendTimer) clearInterval(sendTimer);
+    sendTimer = setInterval(sendFrame, 120);
+  }
+  function sendFrame(){
+    if (!ws || ws.readyState!==1 || !streaming) return;
+    const cap = document.createElement('canvas');
+    cap.width = video.videoWidth || canvas.width;
+    cap.height= video.videoHeight|| canvas.height;
+    cap.getContext('2d').drawImage(video,0,0,cap.width,cap.height);
+    const dataURL = cap.toDataURL('image/jpeg', 0.82);
+    // lưu srcW/srcH local để scale bbox; tiếp tục gửi base64 (tương thích server hiện tại)
+    srcW = cap.width; srcH = cap.height;
+    ws.send(dataURL);
+    setPill('Đang xử lý…','warn');
+  }
 
-    // 2. Xử lý tin nhắn từ WebSocket Server
-    function handleWebSocketMessage(message) {
-        switch (message.type) {
-            case 'face_locations':
-                faceLocations = message.data;
-                break;
-            case 'recognition_data':
-                recognitionData = message.data;
-                lastUpdateEl.textContent = `Recognition updated: ${new Date().toLocaleTimeString()}`;
-                break;
-            case 'config':
-                config = message.data;
-                showBboxCheckbox.checked = config.show_bbox;
-                showLabelCheckbox.checked = config.show_label;
-                break;
-            default:
-                console.log('Unknown message type:', message.type);
+  function connectWS(){
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    ws = new WebSocket(`${proto}//${location.host}/ws`);
+    ws.onopen = () => setPill('Kết nối WS','ok');
+    ws.onclose = () => setPill('Mất kết nối WS','err');
+    ws.onerror = () => setPill('Lỗi WS','err');
+
+    ws.onmessage = ev => {
+      let m; try{ m = JSON.parse(ev.data); }catch{ return; }
+      if (m.type==='frame_result'){
+        if (Array.isArray(m.locs)) lastLocs = m.locs;
+        recogMap = m.data || {};
+        // nếu server có trả meta src_w/h thì override (không bắt buộc)
+        if (m.meta){
+          if (typeof m.meta.threshold==='number'){
+            cfg.threshold = m.meta.threshold;
+            serverThrEl.textContent = cfg.threshold.toFixed(2);
+            thrRange.value = cfg.threshold.toFixed(2);
+            thrNum.value = cfg.threshold.toFixed(2);
+          }
+          if (typeof m.meta.src_w==='number') srcW = m.meta.src_w;
+          if (typeof m.meta.src_h==='number') srcH = m.meta.src_h;
         }
-    }
+        if (resultPre) resultPre.textContent = JSON.stringify({locs:lastLocs, data:recogMap}, null, 2);
+        setPill('Xử lý xong','ok');
+      } else if (m.type==='config' && m.data && typeof m.data.threshold==='number'){
+        cfg.threshold = m.data.threshold;
+        serverThrEl.textContent = cfg.threshold.toFixed(2);
+      }
+    };
+  }
 
-    // 3. Lấy stream từ camera và thiết lập canvas
-    function setupCameraAndCanvas() {
-        navigator.mediaDevices.getUserMedia({ 
-            video: { 
-                width: { ideal: 1280 }, 
-                height: { ideal: 720 } 
-            } 
-        })
-        .then(stream => {
-            video.srcObject = stream;
-            video.play();
-            video.addEventListener('loadedmetadata', () => {
-                // Đặt kích thước canvas bằng kích thước hiển thị của video
-                canvasOverlay.width = video.clientWidth;
-                canvasOverlay.height = video.clientHeight;
-                startAnimationLoop();
-                sendFramesToServer();
-            });
-        })
-        .catch(err => {
-            console.error("Camera access error:", err);
-            statusEl.textContent = "Camera access denied";
-            statusEl.style.color = '#f44336';
-            alert("Could not access the camera. Please check permissions.");
-        });
-    }
-
-    // 4. Vòng lặp vẽ lên canvas (Animation)
-    function startAnimationLoop() {
-        function animate() {
-            drawOverlay();
-            requestAnimationFrame(animate);
+  // API helpers
+  async function fetchServerDebug(){ try{ serverDebugPre.textContent = JSON.stringify(await fetchJSON('/debug'), null, 2); }catch(e){ serverDebugPre.textContent='Error: '+e; } }
+  async function fetchFacebankInfo(){ try{ facebankDebugPre.textContent = JSON.stringify(await fetchJSON('/facebank-info'), null, 2); }catch(e){ facebankDebugPre.textContent='Error: '+e; } }
+  async function fetchRuntimeConfig(){
+    try {
+      const j = await fetchJSON('/runtime-config');
+      runtimePre.textContent = JSON.stringify(j, null, 2);
+      if (j.status==='success'){
+        const d = j.data || {};
+        if (typeof d.threshold==='number'){
+          cfg.threshold = d.threshold;
+          serverThrEl.textContent = d.threshold.toFixed(2);
+          thrRange.value = d.threshold.toFixed(2);
+          thrNum.value = d.threshold.toFixed(2);
         }
-        animate();
-    }
+        if (typeof d.tta==='boolean') ttaChk.checked = d.tta;
+        if (typeof d.debug_top1==='boolean') top1Chk.checked = d.debug_top1;
+      }
+    } catch(e){ runtimePre.textContent = 'Error: '+e; }
+  }
+  async function setThreshold(v){ try{ await fetchJSON('/set-threshold',{method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({threshold:v})}); await fetchRuntimeConfig(); }catch{} }
+  async function setTTA(on){ try{ await fetchJSON('/set-tta',{method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({tta:!!on})}); await fetchRuntimeConfig(); }catch{} }
+  async function setDebugTop1(on){ try{ await fetchJSON('/set-debug-top1',{method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({debug_top1:!!on})}); await fetchRuntimeConfig(); }catch{} }
 
-    // 5. Hàm vẽ chính
-    function drawOverlay() {
-        // Cập nhật kích thước canvas nếu cửa sổ thay đổi
-        if (canvasOverlay.width !== video.clientWidth || canvasOverlay.height !== video.clientHeight) {
-            canvasOverlay.width = video.clientWidth;
-            canvasOverlay.height = video.clientHeight;
-        }
+  // Bind UI
+  stopBtn.onclick = stopCamera;
+  reloadFacebankBtn.onclick = async () => {
+    reloadFacebankBtn.disabled = true;
+    try{ const j = await fetchJSON('/reload-facebank', {method:'POST'});
+      statusLine.textContent = (j.status==='success' ? j.message : ('Error: '+j.message));
+      await fetchFacebankInfo(); await fetchServerDebug();
+    } finally { reloadFacebankBtn.disabled = false; }
+  };
+  thrRange.oninput = () => { thrNum.value = thrRange.value; };
+  thrNum.oninput   = () => { thrRange.value = thrNum.value; };
+  applyThrBtn.onclick = async () => {
+    const v = parseFloat(thrNum.value); if (isFinite(v)) await setThreshold(v);
+  };
+  ttaChk.onchange = async () => { await setTTA(ttaChk.checked); };
+  top1Chk.onchange = async () => { await setDebugTop1(top1Chk.checked); };
+  refreshRuntimeBtn.onclick = fetchRuntimeConfig;
+  refreshDebugBtn.onclick = fetchServerDebug;
+  refreshFacebankBtn.onclick = fetchFacebankInfo;
 
-        ctx.clearRect(0, 0, canvasOverlay.width, canvasOverlay.height);
-
-        statusEl.textContent = faceLocations.length > 0
-            ? `Detected ${faceLocations.length} face(s)`
-            : "No faces detected";
-
-        if (faceLocations.length === 0) {
-            statusEl.style.color = '#666';
-        } else {
-            statusEl.style.color = '#4c7faf';
-        }
-
-        // Tính toán tỉ lệ giữa kích thước video gốc và kích thước hiển thị
-        const scaleX = video.clientWidth / video.videoWidth;
-        const scaleY = video.clientHeight / video.videoHeight;
-
-        faceLocations.forEach(face => {
-            const [x1, y1, x2, y2] = face.bbox;
-            const faceId = face.id;
-
-            // Áp dụng tỉ lệ scale để có được tọa độ chính xác trên canvas
-            const scaledX1 = x1 * scaleX;
-            const scaledY1 = y1 * scaleY;
-            const scaledWidth = (x2 - x1) * scaleX;
-            const scaledHeight = (y2 - y1) * scaleY;
-
-            const recognition = recognitionData[faceId] || { name: "Processing...", confidence: 0 };
-            const { name, confidence } = recognition;
-
-            const boxColor = name === 'Unknown' || name === 'Processing...' ? '#f44336' : '#4caf50';
-
-            // Vẽ bounding box với tọa độ đã được scale
-            if (config.show_bbox) {
-                ctx.strokeStyle = boxColor;
-                ctx.lineWidth = 2;
-                ctx.strokeRect(scaledX1, scaledY1, scaledWidth, scaledHeight);
-            }
-
-            // Vẽ nhãn tên với tọa độ đã được scale
-            if (config.show_label) {
-                const displayText = name !== "Processing..."
-                    ? `${name} (${(confidence * 100).toFixed(0)}%)`
-                    : "Processing...";
-
-                ctx.font = '16px Arial';
-                const textWidth = ctx.measureText(displayText).width;
-
-                // Vẽ nền cho text
-                ctx.fillStyle = boxColor;
-                ctx.fillRect(scaledX1 - 1, scaledY1 - 22, textWidth + 10, 22);
-
-                // Vẽ text
-                ctx.fillStyle = 'white';
-                ctx.fillText(displayText, scaledX1 + 5, scaledY1 - 5);
-            }
-        });
-    }
-
-    // 6. Gửi frame video đến server
-    function sendFramesToServer() {
-        if (!ws || ws.readyState !== WebSocket.OPEN) {
-            setTimeout(sendFramesToServer, 100);
-            return;
-        }
-
-        if (processingFrame) {
-            setTimeout(sendFramesToServer, 50);
-            return;
-        }
-
-        processingFrame = true;
-
-        try {
-            const captureCanvas = document.createElement('canvas');
-            captureCanvas.width = video.videoWidth;
-            captureCanvas.height = video.videoHeight;
-            const captureCtx = captureCanvas.getContext('2d');
-            captureCtx.drawImage(video, 0, 0);
-
-            const dataURL = captureCanvas.toDataURL('image/jpeg', 0.8);
-            ws.send(dataURL);
-        } catch (error) {
-            console.error('Error sending frame:', error);
-        }
-
-        setTimeout(() => {
-            processingFrame = false;
-            sendFramesToServer();
-        }, 150); // Gửi khoảng 6-7 frame/giây
-    }
-
-    // 7. Xử lý sự kiện checkbox hiển thị
-    function setupEventHandlers() {
-        // Xử lý checkbox show/hide bounding box
-        showBboxCheckbox.addEventListener('change', async () => {
-            const newConfig = {
-                show_bbox: showBboxCheckbox.checked,
-                show_label: showLabelCheckbox.checked
-            };
-
-            try {
-                const response = await fetch('/config', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(newConfig)
-                });
-
-                if (response.ok) {
-                    config = newConfig;
-                    console.log('Config updated:', config);
-                } else {
-                    console.error('Failed to update config');
-                }
-            } catch (error) {
-                console.error('Error updating config:', error);
-            }
-        });
-
-        // Xử lý checkbox show/hide label
-        showLabelCheckbox.addEventListener('change', async () => {
-            const newConfig = {
-                show_bbox: showBboxCheckbox.checked,
-                show_label: showLabelCheckbox.checked
-            };
-
-            try {
-                const response = await fetch('/config', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(newConfig)
-                });
-
-                if (response.ok) {
-                    config = newConfig;
-                    console.log('Config updated:', config);
-                } else {
-                    console.error('Failed to update config');
-                }
-            } catch (error) {
-                console.error('Error updating config:', error);
-            }
-        });
-
-        // Xử lý nút reload facebank
-        reloadFacebankBtn.addEventListener('click', async () => {
-            reloadFacebankBtn.disabled = true;
-            reloadFacebankBtn.textContent = 'Reloading...';
-            facebankStatus.textContent = 'Processing...';
-            facebankStatus.style.color = '#ff9800';
-
-            try {
-                const response = await fetch('/reload-facebank', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' }
-                });
-
-                const result = await response.json();
-
-                if (result.status === 'success') {
-                    facebankStatus.textContent = result.message;
-                    facebankStatus.style.color = '#4caf50';
-                } else {
-                    facebankStatus.textContent = `Error: ${result.message}`;
-                    facebankStatus.style.color = '#f44336';
-                }
-            } catch (error) {
-                console.error('Error reloading facebank:', error);
-                facebankStatus.textContent = 'Network error occurred';
-                facebankStatus.style.color = '#f44336';
-            } finally {
-                reloadFacebankBtn.disabled = false;
-                reloadFacebankBtn.textContent = 'Reload Facebank';
-            }
-        });
-
-        // Xử lý slider threshold
-        thresholdSlider.addEventListener('input', () => {
-            thresholdValue.textContent = thresholdSlider.value;
-        });
-
-        // Xử lý nút apply threshold
-        applyThresholdBtn.addEventListener('click', async () => {
-            const threshold = parseFloat(thresholdSlider.value);
-
-            try {
-                const response = await fetch('/threshold', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ threshold: threshold })
-                });
-
-                const result = await response.json();
-
-                if (result.status === 'success') {
-                    console.log(`Threshold updated from ${result.old_threshold} to ${result.new_threshold}`);
-                    alert(`Threshold updated to ${result.new_threshold}`);
-                } else {
-                    console.error('Failed to update threshold');
-                    alert('Failed to update threshold');
-                }
-            } catch (error) {
-                console.error('Error updating threshold:', error);
-                alert('Error updating threshold');
-            }
-        });
-    }
-
-    // 8. Tải threshold hiện tại từ server
-    async function loadCurrentThreshold() {
-        try {
-            const response = await fetch('/threshold');
-            const result = await response.json();
-
-            if (result.threshold) {
-                thresholdSlider.value = result.threshold;
-                thresholdValue.textContent = result.threshold;
-                console.log('Current threshold loaded:', result.threshold);
-            }
-        } catch (error) {
-            console.error('Error loading current threshold:', error);
-        }
-    }
-
-    // --- KHỞI TẠO ỨNG DỤNG ---
-    function init() {
-        console.log('Initializing Face Recognition App...');
-
-        // Thiết lập camera và canvas
-        setupCameraAndCanvas();
-
-        // Thiết lập các event handlers
-        setupEventHandlers();
-
-        // Tải threshold hiện tại
-        loadCurrentThreshold();
-
-        // Kết nối WebSocket
-        connectWebSocket();
-
-        console.log('Face Recognition App initialized successfully!');
-    }
-
-    // Bắt đầu ứng dụng
-    init();
+  // Boot
+  setPill('Đang khởi tạo…','warn');
+  fetchServerDebug(); fetchFacebankInfo(); fetchRuntimeConfig();
+  startCamera();
 });
