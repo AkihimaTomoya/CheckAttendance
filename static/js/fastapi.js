@@ -1,6 +1,7 @@
 document.addEventListener('DOMContentLoaded', () => {
   const $ = id => document.getElementById(id);
 
+  // Elements
   const video = $('videoStream');
   const canvas = $('canvasOverlay');
   const ctx = canvas.getContext('2d');
@@ -10,6 +11,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const faceCountEl = $('faceCount');
   const statusLine = $('status');
 
+  const startBtn = $('startBtn');
   const stopBtn = $('stopBtn');
   const reloadFacebankBtn = $('reloadFacebankBtn');
 
@@ -20,9 +22,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const serverDebugPre = $('serverDebugPre'), facebankDebugPre = $('facebankDebugPre');
   const refreshDebugBtn = $('refreshDebugBtn'), refreshFacebankBtn = $('refreshFacebankBtn');
 
+  // State
   let ws = null, streaming = false, sendTimer = null;
   let lastLocs = [], recogMap = {}, cfg = { threshold: null };
-  // kích thước nguồn dùng để scale bbox -> canvas hiển thị
   let srcW = null, srcH = null;
 
   const setPill = (t,c) => { connectionStatus.textContent=t; connectionStatus.className='pill '+(c||''); };
@@ -51,7 +53,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     faces.forEach(loc => {
       let [x1,y1,x2,y2] = loc.bbox;
-      // scale bbox theo kích thước hiển thị
       x1 = Math.round(x1*sx); y1 = Math.round(y1*sy);
       x2 = Math.round(x2*sx); y2 = Math.round(y2*sy);
 
@@ -62,9 +63,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const thr  = (typeof cfg.threshold === 'number') ? cfg.threshold : (rec.threshold || 1.56);
       const pass = (typeof dist === 'number') ? (dist < thr) : false;
 
-      // Dùng đúng 3 tông: pass = #198cf0, not-pass = hsl(201,97%,72%), text = #fff
       const color = pass ? '#198cf0' : 'hsl(201, 97%, 72%)';
-
       ctx.lineWidth = 2; ctx.strokeStyle = color;
       ctx.strokeRect(x1, y1, x2-x1, y2-y1);
 
@@ -82,11 +81,18 @@ document.addEventListener('DOMContentLoaded', () => {
   async function startCamera(){
     if (streaming) return;
     try{
+      if (startBtn) startBtn.disabled = true;
+      if (stopBtn)  stopBtn.disabled  = true;
       const stream = await navigator.mediaDevices.getUserMedia({ video:{width:{ideal:1280}, height:{ideal:720}}, audio:false });
       video.srcObject = stream; await video.play();
-      streaming = true; setPill('Đã kết nối','ok'); setStatus('Camera đã bật');
+      streaming = true;
+      if (startBtn) startBtn.disabled = true;
+      if (stopBtn)  stopBtn.disabled  = false;
+      setPill('Đã kết nối','ok'); setStatus('Camera đã bật');
       connectWS(); kickLoops(); requestAnimationFrame(drawOverlay);
     }catch(e){
+      if (startBtn) startBtn.disabled = false;
+      if (stopBtn)  stopBtn.disabled  = true;
       setPill('Lỗi camera','err'); setStatus('Không mở được camera. Hãy cấp quyền.');
     }
   }
@@ -95,6 +101,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (sendTimer) { clearInterval(sendTimer); sendTimer=null; }
     if (ws){ try{ ws.close(); }catch{} ws=null; }
     const so = video.srcObject; if (so){ so.getTracks().forEach(t=>t.stop()); video.srcObject=null; }
+    if (startBtn) startBtn.disabled = false;
+    if (stopBtn)  stopBtn.disabled  = true;
     setPill('Đã tắt','warn'); setStatus('Camera đã tắt');
     faceCountEl.textContent = '0'; lastLocs=[]; recogMap={}; ctx.clearRect(0,0,canvas.width,canvas.height);
   }
@@ -109,7 +117,6 @@ document.addEventListener('DOMContentLoaded', () => {
     cap.height= video.videoHeight|| canvas.height;
     cap.getContext('2d').drawImage(video,0,0,cap.width,cap.height);
     const dataURL = cap.toDataURL('image/jpeg', 0.82);
-    // lưu srcW/srcH local để scale bbox; tiếp tục gửi base64 (tương thích server hiện tại)
     srcW = cap.width; srcH = cap.height;
     ws.send(dataURL);
     setPill('Đang xử lý…','warn');
@@ -121,13 +128,11 @@ document.addEventListener('DOMContentLoaded', () => {
     ws.onopen = () => setPill('Kết nối WS','ok');
     ws.onclose = () => setPill('Mất kết nối WS','err');
     ws.onerror = () => setPill('Lỗi WS','err');
-
     ws.onmessage = ev => {
       let m; try{ m = JSON.parse(ev.data); }catch{ return; }
       if (m.type==='frame_result'){
         if (Array.isArray(m.locs)) lastLocs = m.locs;
         recogMap = m.data || {};
-        // nếu server có trả meta src_w/h thì override (không bắt buộc)
         if (m.meta){
           if (typeof m.meta.threshold==='number'){
             cfg.threshold = m.meta.threshold;
@@ -172,9 +177,10 @@ document.addEventListener('DOMContentLoaded', () => {
   async function setDebugTop1(on){ try{ await fetchJSON('/set-debug-top1',{method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({debug_top1:!!on})}); await fetchRuntimeConfig(); }catch{} }
 
   // Bind UI
-  stopBtn.onclick = stopCamera;
-  reloadFacebankBtn.onclick = async () => {
-    reloadFacebankBtn.disabled = true;
+  if (startBtn) startBtn.onclick = startCamera;
+  if (stopBtn)  stopBtn.onclick  = stopCamera;
+  if (reloadFacebankBtn) reloadFacebankBtn.onclick = async () => {
+    reloadFacebankBtn.disabled = True;
     try{ const j = await fetchJSON('/reload-facebank', {method:'POST'});
       statusLine.textContent = (j.status==='success' ? j.message : ('Error: '+j.message));
       await fetchFacebankInfo(); await fetchServerDebug();
@@ -182,17 +188,18 @@ document.addEventListener('DOMContentLoaded', () => {
   };
   thrRange.oninput = () => { thrNum.value = thrRange.value; };
   thrNum.oninput   = () => { thrRange.value = thrNum.value; };
-  applyThrBtn.onclick = async () => {
-    const v = parseFloat(thrNum.value); if (isFinite(v)) await setThreshold(v);
-  };
+  applyThrBtn.onclick = async () => { const v = parseFloat(thrNum.value); if (isFinite(v)) await setThreshold(v); };
   ttaChk.onchange = async () => { await setTTA(ttaChk.checked); };
   top1Chk.onchange = async () => { await setDebugTop1(top1Chk.checked); };
   refreshRuntimeBtn.onclick = fetchRuntimeConfig;
   refreshDebugBtn.onclick = fetchServerDebug;
   refreshFacebankBtn.onclick = fetchFacebankInfo;
 
-  // Boot
+  // Initial bootstrap: show disabled while loading
+  if (startBtn) startBtn.disabled = true;
+  if (stopBtn)  stopBtn.disabled  = true;
   setPill('Đang khởi tạo…','warn');
   fetchServerDebug(); fetchFacebankInfo(); fetchRuntimeConfig();
+  // Auto start on load
   startCamera();
 });
