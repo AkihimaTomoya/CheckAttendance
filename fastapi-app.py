@@ -59,7 +59,7 @@ if args.model_dir:
 try:
     import importlib
     face_verify = importlib.import_module("face_verify")
-    face_verify.initialize(config, update_facebank=False)
+    face_verify.initialize(config, update_facebank=True)
 
     FaceVerificationApp = face_verify.FaceVerificationApp
     face_verification_app = FaceVerificationApp()
@@ -242,3 +242,4 @@ if __name__ == "__main__":
         uvicorn.run(app, host=args.host, port=args.port, log_level="info", access_log=True)
     except Exception:
         traceback.print_exc()
+
