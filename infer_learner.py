@@ -23,18 +23,7 @@ class face_learner(object):
                 self.model.fp16 = False
             except Exception:
                 pass
-
-        # Preload FFM.B if exists (kept for backward compatibility)
-        try:
-            if hasattr(self.model, "ffm") and hasattr(self.model.ffm, "B"):
-                b_path = Path(getattr(conf, "output", ".")) / "ffm_B.pt"
-                if b_path.is_file():
-                    B = torch.load(b_path, map_location="cpu")
-                    with torch.no_grad():
-                        self.model.ffm.B.copy_(B.to(dtype=torch.float32, device=self.model.ffm.B.device))
-        except Exception:
-            pass
-
+            
     def load_state(self, conf, fixed_str, from_save_folder=False, model_only=True):
         base_dir = getattr(conf, "output", None) or getattr(conf, "model_path", None)
         if base_dir is None:
