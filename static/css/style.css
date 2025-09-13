@@ -13,7 +13,9 @@
   --border: #e5e7eb;
   --primary: #198cf0;
   --primary-2: hsl(201, 97%, 72%);
-  --ok:#16a34a; --warn:#f59e0b; --err:#ef4444;
+  --ok:#16a34a;
+  --warn:#f59e0b;
+  --err:#ef4444;
 }
 
 html, body { height:100%; }
@@ -26,7 +28,7 @@ body{
 
 .container{
   max-width: 1240px; margin:0 auto;
-  background: #fff;
+  background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 14px; padding: 22px;
   box-shadow: 0 12px 30px rgba(17,24,39,.06);
@@ -35,7 +37,7 @@ body{
 header{
   display:flex; align-items:center; justify-content:space-between; gap:12px;
   margin-bottom: 14px;
-  background: #fff;
+  background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 10px 12px;
@@ -50,7 +52,7 @@ h1{ font-size: 22px; letter-spacing:.3px; }
 .pill.warn{ color:#0b4f7b; background: rgba(25,140,240,.12); border-color: var(--primary); }
 .pill.err{ color:#7f1d1d; background: rgba(239,68,68,.12); border-color: var(--err); }
 
-.badge{ display:inline-flex; align-items:center; gap:6px; padding:6px 10px; border-radius: 999px; font-size:12px; border:1px solid var(--border); background: #fff; color: var(--muted); }
+.badge{ display:inline-flex; align-items:center; gap:6px; padding:6px 10px; border-radius: 999px; font-size:12px; border:1px solid var(--border); background: var(--bg); color: var(--muted); }
 
 /* Media area */
 #mediaWrap{ position:relative; width:100%; margin: 8px auto 16px; border-radius: 12px; overflow:hidden; border:1px solid var(--border); background:#000; }
@@ -61,7 +63,7 @@ h1{ font-size: 22px; letter-spacing:.3px; }
 @media (max-width: 1024px){ .grid{ grid-template-columns: 1fr; } }
 
 .card{
-  background: #fff;
+  background: var(--primary-2);   /* đã sửa */
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 14px;
@@ -88,7 +90,7 @@ button{
   padding:9px 14px; border-radius:10px; cursor:pointer;
   font-weight:700; letter-spacing:.2px;
   box-shadow: 0 4px 12px rgba(25,140,240,.35);
-  transition: transform .18s ease, box-shadow .18s ease, opacity .18s ease, filter .18s ease;
+  transition: all .18s ease;
 }
 button:hover{ transform: translateY(-1px); box-shadow: 0 6px 18px rgba(25,140,240,.45); filter: brightness(1.02); }
 button:active{ transform: translateY(0); box-shadow: 0 4px 12px rgba(25,140,240,.35); }
@@ -99,7 +101,7 @@ input[type="range"]{ width: 220px; accent-color: var(--primary); }
 input[type="number"], input[type="text"], textarea{
   width: 84px; padding:7px 9px; border-radius: 10px;
   border:1px solid var(--border);
-  background: #fff; color: var(--text);
+  background: var(--bg); color: var(--text);
   transition: background-color .15s ease, border-color .15s ease, box-shadow .15s ease;
 }
 input[type="number"]:focus,
@@ -113,8 +115,8 @@ textarea:focus{
 
 /* Pre / debug blocks */
 pre{
-  background: #fff;
-  color: #111827;
+  background: var(--bg);
+  color: var(--text);
   border:1px solid var(--border);
   border-radius: 10px; padding: 10px; white-space: pre-wrap; font-size: 12px;
 }
