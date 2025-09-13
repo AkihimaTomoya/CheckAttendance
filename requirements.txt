@@ -18,3 +18,5 @@ psutil
 mediapipe
 uvicorn[standard]
 fastapi
+pandas
+seaborn
