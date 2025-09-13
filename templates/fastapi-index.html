@@ -11,10 +11,10 @@
     <header>
       <h1>Face Recognition</h1>
       <div class="subrow">
-        <label class="row"><input id="overlayChk" type="checkbox" checked />&nbsp;Hiển thị khung & tên</label>
-        <button id="toggleCameraBtn" type="button">Bật camera</button>
+        <label class="row"><input id="overlayChk" type="checkbox" checked />&nbsp;Display bbox & name</label>
+        <button id="toggleCameraBtn" type="button">Turn on camera</button>
         <button id="reloadFacebankBtn" type="button" class="secondary">Reload Facebank</button>
-        <span id="connectionStatus" class="pill warn">Chưa kết nối</span>
+        <span id="connectionStatus" class="pill warn">Not Connected</span>
       </div>
     </header>
 
@@ -24,10 +24,11 @@
     </section>
 
     <div class="card">
-      <div id="status" class="muted">Sẵn sàng.</div><div id="debugLine" class="muted" style="margin-top:6px;"></div>
+      <div id="status" class="muted">Ready.</div><div id="debugLine" class="muted" style="margin-top:6px;"></div>
     </div>
   </div>
 
   <script defer src="/static/js/fastapi.js?v=2"></script>
 </body>
 </html>
+
