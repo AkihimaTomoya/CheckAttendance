@@ -8,27 +8,39 @@
 </head>
 <body>
   <div class="container">
-    <header>
-      <h1>Face Recognition</h1>
-      <div class="subrow">
-        <label class="row"><input id="overlayChk" type="checkbox" checked />&nbsp;Display bbox & name</label>
-        <button id="toggleCameraBtn" type="button">Turn on camera</button>
-        <button id="reloadFacebankBtn" type="button" class="secondary">Reload Facebank</button>
-        <span id="connectionStatus" class="pill warn">Not Connected</span>
+    <header class="app-header">
+      <div class="brand">
+        <div class="logo-dot"></div>
+        <h1>Face Recognition</h1>
+      </div>
+
+      <div class="toolbar">
+        <label class="row chk toggle" title="Display bbox & name">
+          <input id="overlayChk" type="checkbox" checked />
+        </label>
+
+          <div class="btn-group">
+            <button id="toggleCameraBtn" type="button" class="btn">Turn on camera</button>
+            <button id="reloadFacebankBtn" type="button" class="btn secondary">Reload Facebank</button>
+          </div>
+
+          <span id="connectionStatus" class="pill warn">Not Connected</span>
+        </div>
+
+        <!-- Nhóm trạng thái cố định kích thước bên phải -->
+        <div class="status-group">
+          <span id="status" class="status-badge">Ready.</span>
+          <span id="debugLine" class="status-badge debug-badge" aria-live="polite"></span>
+        </div>
       </div>
     </header>
 
-    <section id="mediaWrap">
+    <section id="mediaWrap" class="media">
       <video id="videoStream" autoplay muted playsinline></video>
       <canvas id="canvasOverlay"></canvas>
     </section>
-
-    <div class="card">
-      <div id="status" class="muted">Ready.</div><div id="debugLine" class="muted" style="margin-top:6px;"></div>
-    </div>
   </div>
 
-  <script defer src="/static/js/fastapi.js?v=2"></script>
+  <script defer src="/static/js/fastapi.js"></script>
 </body>
 </html>
-
