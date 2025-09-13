@@ -113,3 +113,4 @@ python fastapi-app.py -d work_dirs/res50_ffm_onegpu
 - Thresholds and runtime options (e.g., **TTA**, **Show Top-1**) can be adjusted live from the web UI.
 - To rebuild or refresh the facebank at runtime, use the **Reload Facebank** button in the interface.
 - Debug information (server state, facebank details) can also be viewed directly in the UI.
+- If you run a new model in real-time inference, you need to reload the facebank so the system can correctly recognize identities with the updated data.
