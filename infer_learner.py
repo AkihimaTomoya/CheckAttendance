@@ -23,7 +23,8 @@ class face_learner(object):
                 self.model.fp16 = False
             except Exception:
                 pass
-            
+
+
     def load_state(self, conf, fixed_str, from_save_folder=False, model_only=True):
         base_dir = getattr(conf, "output", None) or getattr(conf, "model_path", None)
         if base_dir is None:
