@@ -5,7 +5,7 @@ from typing import List
 
 import torch
 
-from eval import verification
+from eval import verification as veri
 from utils.utils_logging import AverageMeter
 from torch.utils.tensorboard import SummaryWriter
 from torch import distributed
@@ -123,3 +123,4 @@ class CallBackLogging(object):
             else:
                 self.init = True
                 self.tic = time.time()
+
