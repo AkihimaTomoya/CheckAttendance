@@ -29,12 +29,20 @@ document.addEventListener('DOMContentLoaded', () => {
     connectionStatus.textContent = text;
     connectionStatus.className = 'pill ' + (cls || '');
   }
-  function setStatus(text) {
-    statusLine.textContent = text;
+
+  function setStatus(text, cls) {
+    if (!statusLine) return;
+    statusLine.textContent = text || '';
+    statusLine.className = 'status-badge' + (cls ? ' ' + cls : '');
+    statusLine.title = text || '';
   }
-  function setDebug(text) {
-    if (debugLine) debugLine.textContent = text;
-    // console.log('[DEBUG]', text);
+
+  function setDebug(text, cls) {
+    if (!debugLine) return;
+    const t = text || '';
+    debugLine.textContent = t;
+    debugLine.className = 'status-badge debug-badge' + (cls ? ' ' + cls : '');
+    debugLine.title = t; // hover để xem full, UI vẫn ellipsis
   }
 
   // ---------- Canvas & drawing ----------
@@ -51,12 +59,17 @@ document.addEventListener('DOMContentLoaded', () => {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     if (!overlayOn) {
+      setStatus('Camera is on (overlay hidden)', 'warn');
       overlayRAF = requestAnimationFrame(drawOverlay);
       return;
     }
 
     const faces = Array.isArray(lastLocs) ? lastLocs : [];
-    setStatus(faces.length > 0 ? `Tracking ${faces.length} face(s)` : 'Waiting for frames…');
+    if (faces.length > 0) {
+      setStatus(`Tracking ${faces.length} face(s)`, 'ok');
+    } else {
+      setStatus('Waiting for frames…', 'warn');
+    }
 
     const sw = srcW || canvas.width;
     const sh = srcH || canvas.height;
@@ -90,7 +103,6 @@ document.addEventListener('DOMContentLoaded', () => {
       ctx.fillRect(x1, ly, tw + 10, 22);
       ctx.fillStyle = '#052e1e';
       ctx.fillText(label, x1 + 5, ly + 16);
-
     }
 
     overlayRAF = requestAnimationFrame(drawOverlay);
@@ -135,14 +147,14 @@ document.addEventListener('DOMContentLoaded', () => {
       toggleCameraBtn.disabled = false;
       toggleCameraBtn.textContent = 'Turn off camera';
       setPill('Connected', 'ok');
-      setStatus('Camera is on');
+      setStatus('Camera is on', 'ok');
       overlayRAF = requestAnimationFrame(drawOverlay);
       frameRAF = requestAnimationFrame(tickSend);
     } catch (e) {
       toggleCameraBtn.disabled = false;
       setPill('Camera error', 'err');
-      setStatus(explainGetUserMediaError(e));
-      setDebug('getUserMedia error: ' + (e && e.message ? e.message : e));
+      setStatus(explainGetUserMediaError(e), 'err');
+      setDebug('getUserMedia error: ' + (e && e.message ? e.message : e), 'err');
       console.error(e);
     }
   }
@@ -158,7 +170,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     toggleCameraBtn.textContent = 'Turn on camera';
     setPill('Off', 'warn');
-    setStatus('Camera is off');
+    setStatus('Camera is off', 'warn');
     ctx.clearRect(0, 0, canvas.width, canvas.height);
   }
 
@@ -176,7 +188,7 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       ws.send(dataURL);
     } catch (e) {
-      setDebug('WS send error: ' + e);
+      setDebug('WS send error: ' + e, 'err');
     }
   }
 
@@ -193,20 +205,21 @@ document.addEventListener('DOMContentLoaded', () => {
   function connectWS() {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const url = `${proto}//${location.host}/ws`;
-    setDebug('Connecting WS: ' + url);
+    setDebug('Connecting WS: ' + url, 'warn');
     try {
       ws = new WebSocket(url);
       ws.onopen = () => {
         setPill('WS connected', 'ok');
-        setDebug('WS open');
+        setDebug('WS open', 'ok');
       };
       ws.onclose = () => {
         setPill('WS disconnected', 'err');
-        setDebug('WS close');
+        setDebug('WS close', 'err');
+        if (streaming) setStatus('Camera on, WS disconnected', 'warn');
       };
       ws.onerror = (ev) => {
         setPill('WS error', 'err');
-        setDebug('WS error');
+        setDebug('WS error', 'err');
         console.error(ev);
       };
       ws.onmessage = (ev) => {
@@ -219,23 +232,19 @@ document.addEventListener('DOMContentLoaded', () => {
         if (m.type === 'frame_result') {
           if (Array.isArray(m.locs)) lastLocs = m.locs;
           recogMap = m.data || {};
-          if (m.meta && typeof m.meta.threshold === 'number') {
-            // Optionally show in debug, if needed.
-            // setDebug(`Threshold: ${m.meta.threshold}`);
-          }
         } else if (m.type === 'config') {
-          // Server broadcast config updates
           const cfg = m.data || {};
           if ('show_bbox' in cfg) {
             overlayOn = !!cfg.show_bbox;
             if (overlayChk) overlayChk.checked = overlayOn;
+            setDebug('Overlay updated from server -> ' + overlayOn, overlayOn ? 'ok' : 'warn');
           }
         } else if (m.type === 'infer_status') {
-          // Could toggle a spinner here
+          // optional spinner here
         }
       };
     } catch (e) {
-      setDebug('WS connect exception: ' + e);
+      setDebug('WS connect exception: ' + e, 'err');
     }
   }
 
@@ -253,9 +262,13 @@ document.addEventListener('DOMContentLoaded', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ show_bbox: overlayOn, show_label: overlayOn }),
       });
-      setDebug('Overlay config sent -> ' + overlayOn);
+      setDebug('Overlay config sent -> ' + overlayOn, overlayOn ? 'ok' : 'warn');
+      if (streaming) {
+        setStatus(overlayOn ? 'Overlay enabled' : 'Overlay disabled', overlayOn ? 'ok' : 'warn');
+      }
     } catch (e) {
-      setDebug('Overlay config error: ' + e);
+      setDebug('Overlay config error: ' + e, 'err');
+      setStatus('Overlay update failed', 'err');
     }
   });
 
@@ -264,11 +277,13 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       const res = await fetch('/reload-facebank', { method: 'POST' });
       const js = await res.json();
-      setStatus((js.status === 'success' ? 'Facebank: ' : 'Error: ') + (js.message || ''));
-      setDebug('Reload facebank -> ' + (js.status || 'unknown'));
+      setStatus((js.status === 'success' ? 'Facebank: ' : 'Error: ') + (js.message || ''),
+                js.status === 'success' ? 'ok' : 'err');
+      setDebug('Reload facebank -> ' + (js.status || 'unknown'),
+               js.status === 'success' ? 'ok' : 'err');
     } catch (e) {
-      setStatus('Reload error: ' + e);
-      setDebug('Reload error: ' + e);
+      setStatus('Reload error: ' + e, 'err');
+      setDebug('Reload error: ' + e, 'err');
     } finally {
       reloadFacebankBtn.disabled = false;
     }
@@ -283,11 +298,10 @@ document.addEventListener('DOMContentLoaded', () => {
   (async () => {
     overlayOn = overlayChk ? overlayChk.checked : true;
     setPill('Connecting WS...', 'warn');
-    setStatus('Ready.');
+    setStatus('Ready.', 'warn');
     await bootstrapConfig();
     connectWS();
-    // draw loop starts when camera is on
-    setDebug('Ready. Click "Turn on camera" to start.');
+    setDebug('Ready. Click "Turn on camera" to start.', 'warn');
   })();
 
   async function bootstrapConfig() {
@@ -301,8 +315,6 @@ document.addEventListener('DOMContentLoaded', () => {
           if (overlayChk) overlayChk.checked = overlayOn;
         }
       }
-    } catch (e) {
-      // ignore
-    }
+    } catch (e) { /* ignore */ }
   }
 });
