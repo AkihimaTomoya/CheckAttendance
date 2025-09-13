@@ -1,7 +1,6 @@
-# Face Recognition Realtime
+# Face Recognition Realtime Server
 
 This project provides a FastAPI-based server for **real-time face detection and recognition** with webcam streaming and a modern web UI.
-It uses a custom YOLOv8s model for face detection and ArcFace for recognition, enhanced with a new preprocessing method.
 
 ---
 
@@ -39,18 +38,44 @@ facebank/
 │   └── Bob/
 │       ├── 1.jpg
 │       └── 2.jpg
-├── _ffm/          
-│   ├── Alice/        # one folder per person
-│   │   ├── 1.jpg
-│   │   └── 2.jpg
-│   └── Bob/
-│       ├── 1.jpg
-│       └── 2.jpg
 └── ...
 ```
 
 - Each subfolder name is treated as the person’s identity.  
 - The system will automatically build embeddings (face features) from these images to use during recognition.
+
+---
+
+## Train a Model (Optional)
+You can train a face recognition model using the provided training scripts. If you already have a trained model, you can skip this step.
+To train a model, run:
+
+```bash
+python train_v2.py -c configs/res50_fan_onegpu.py
+```
+
+This will save the trained model in the `work_dirs/res50_fan_onegpu/` directory.
+
+---
+
+## Download Pretrained Model (Optional)
+If you don't want to train a model from scratch, you can download pretrained models.
+```bash
+pip install huggingface_hub
+
+```
+Then, use the following Python script to download the model:
+```python
+from huggingface_hub import snapshot_download
+
+snapshot_download(
+    repo_id="Akihima/EnchancedArcFace",
+    local_dir="work_dirs",
+    allow_patterns=["**/*"],
+    local_dir_use_symlinks=False
+)
+print("Download complete. Check the 'work_dirs' directory.")
+```
 
 ---
 
