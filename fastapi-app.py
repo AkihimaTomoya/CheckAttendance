@@ -1,4 +1,4 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -18,7 +18,7 @@ MODEL_NAME_HINTS = [
     ("r100",          "r100"),
 ]
 
-MODEL_THRESHOLDS = {
+MODEL_BEST_THRESHOLDS = {
     "r50":           1.7,
     "res50_ffm":     1.56,
     "res50_fan":     1.7,
@@ -33,8 +33,8 @@ def apply_model_overrides(cfg, model_dir: str):
     for key, net in MODEL_NAME_HINTS:
         if key in dir_name:
             cfg.network = net
-            if key in MODEL_THRESHOLDS:
-                cfg.threshold = MODEL_THRESHOLDS[key]
+            if key in MODEL_BEST_THRESHOLDS:
+                cfg.threshold = MODEL_BEST_THRESHOLDS[key]
             return
 
 # --- CLI ---
@@ -72,7 +72,7 @@ app = FastAPI(title="Face Recognition API", version="1.0.0")
 
 # Static files (optional)
 try:
-    app.mount("/static", StaticFiles(directory="static"), name="static")
+    app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
 except Exception:
     pass
 
@@ -87,8 +87,6 @@ class SetThreshold(BaseModel):
     threshold: float
 class SetTTA(BaseModel):
     tta: bool
-class SetDebugTop1(BaseModel):
-    debug_top1: bool
 
 # --- WebSocket Connection Manager ---
 class ConnectionManager:
@@ -147,43 +145,6 @@ async def get_status():
         "config": ui_config
     }
 
-@app.get("/debug")
-async def debug_state():
-    try:
-        from face_verify import learner, FaceVerificationApp
-        model = learner.model if learner is not None else None
-        conv1 = getattr(model, "conv1", None)
-        conv1_in = int(getattr(conv1, "in_channels", 0)) if conv1 else None
-        use_ffm = bool(getattr(model, "use_ffm", False)) if model else None
-        app_tmp = FaceVerificationApp()
-        tgt = app_tmp._targets_on_device()
-        tshape = None if not isinstance(tgt, torch.Tensor) else tuple(tgt.shape)
-        return {
-            "network": getattr(config, "network", None),
-            "threshold": float(face_verify.get_threshold()),
-            "use_ffm": use_ffm,
-            "conv1_in": conv1_in,
-            "targets_shape": tshape,
-        }
-    except Exception as e:
-        return {"error": str(e)}
-
-@app.get("/facebank-info")
-async def facebank_info_endpoint():
-    try:
-        info = face_verify.facebank_info()
-        return {"status": "success", "data": info}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-@app.get("/runtime-config")
-async def runtime_config():
-    try:
-        cfg = face_verify.get_runtime_config()
-        return {"status": "success", "data": cfg}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
 @app.post("/set-threshold")
 async def set_threshold_api(req: SetThreshold):
     try:
@@ -198,14 +159,6 @@ async def set_tta_api(req: SetTTA):
     try:
         cur = face_verify.set_tta(req.tta)
         return {"status": "success", "tta": bool(cur)}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-@app.post("/set-debug-top1")
-async def set_debug_top1_api(req: SetDebugTop1):
-    try:
-        cur = face_verify.set_debug_top1(req.debug_top1)
-        return {"status": "success", "debug_top1": bool(cur)}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
@@ -274,7 +227,6 @@ async def process_frame(websocket: WebSocket, data: str):
 
     except Exception:
         traceback.print_exc()
-
 
 # Health check
 @app.get("/health")
