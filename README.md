@@ -31,13 +31,12 @@ Before running inference, prepare your **facebank** (the database of known ident
 **Example structure:**
 ```
 facebank/
-├── _nonffm/          
-│   ├── Alice/        # one folder per person
+├── Alice/        # one folder per person
 │   │   ├── 1.jpg
 │   │   └── 2.jpg
 │   └── Bob/
 │       ├── 1.jpg
-│       └── 2.jpg
+│       └── 2.jpg 
 └── ...
 ```
 
@@ -51,10 +50,10 @@ You can train a face recognition model using the provided training scripts. If y
 To train a model, run:
 
 ```bash
-python train_v2.py -c configs/res50_fan_onegpu.py
+python train_v2.py -c configs/res50_custom_onegpu.py
 ```
 
-This will save the trained model in the `work_dirs/res50_fan_onegpu/` directory.
+This will save the trained model in the `work_dirs/res50_custom_onegpu/` directory.
 
 ---
 
