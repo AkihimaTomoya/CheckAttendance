@@ -76,7 +76,19 @@ snapshot_download(
 )
 print("Download complete. Check the 'work_dirs' directory.")
 ```
-
+**Struceture:**
+```
+work_dirs/
+├── ms1mv3_r50_onegpu/          
+│   └── model.pt
+├── res50_custom2_onegpu/          
+│   └── model.pt
+├── res50_custom_onegpu/          
+│   └── model.pt
+├── res50_ffm_onegpu/          
+│   └── model.pt 
+└── ...
+```
 ---
 
 ## Run Realtime Inference
