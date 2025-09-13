@@ -74,17 +74,23 @@ document.addEventListener('DOMContentLoaded', () => {
       const name = rec.name || rec.name_top1 || 'Unknown';
 
       ctx.lineWidth = 2;
-      ctx.strokeStyle = '#10b981';
+      if (name === 'Unknown') {
+        ctx.strokeStyle = '#ef4444'; // đỏ
+        ctx.fillStyle = '#ef4444';
+      } else {
+        ctx.strokeStyle = '#10b981'; // xanh
+        ctx.fillStyle = '#10b981';
+      }
       ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
 
       const label = name;
       ctx.font = '14px ui-sans-serif, system-ui';
       const tw = ctx.measureText(label).width;
       const ly = Math.max(0, y1 - 22);
-      ctx.fillStyle = '#10b981';
       ctx.fillRect(x1, ly, tw + 10, 22);
       ctx.fillStyle = '#052e1e';
       ctx.fillText(label, x1 + 5, ly + 16);
+
     }
 
     overlayRAF = requestAnimationFrame(drawOverlay);
