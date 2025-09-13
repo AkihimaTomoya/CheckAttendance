@@ -39,6 +39,129 @@ except KeyError:
         world_size=world_size,
     )
 
+# ---------------- Helper: config schema & grouping ----------------
+REQUIRED_KEYS = [
+    # dataset / training schedule
+    "rec", "num_classes", "num_image", "num_epoch", "warmup_epoch",
+    # optimization
+    "optimizer", "lr", "weight_decay", "batch_size",
+    # arcface / loss
+    "margin_list", "embedding_size", "sample_rate",
+    # runtime
+    "seed", "num_workers", "fp16",
+    # logging / verification
+    "verbose", "frequent", "val_targets",
+]
+OPTIONAL_KEYS = [
+    "interclass_filtering_threshold", "momentum",
+    "dali", "dali_aug", "gradient_acc",
+    "resume", "save_all_states", "output",
+    # wandb
+    "using_wandb", "wandb_key", "wandb_entity", "wandb_project",
+    "wandb_log_all", "save_artifacts", "wandb_resume", "suffix_run_name", "notes",
+]
+
+BACKBONE_GROUPS = {
+    "iresnet_std": {"r18","r34","r50","r100","r200","r2060"},
+    "custom_v1": {"r50_custom_v1", "r100_custom_v1"},
+    "custom_v2": {"r50_custom_v2", "r100_custom_v2"},
+    "fan_ffm": {"r50_fan", "r50_fan_ffm", "r50_ffm"},
+    "mobile": {"mbf", "mbf_large"},
+    "vit": {"vit_t", "vit_s", "vit_b"},
+}
+
+def resolve_backbone_group(name: str) -> str:
+    for g, names in BACKBONE_GROUPS.items():
+        if name in names:
+            return g
+    if name.startswith("vit"):
+        return "vit"
+    return "unknown"
+
+def resolve_output_path(cfg, base_dir="runs"):
+    if getattr(cfg, "output", None):
+        return cfg.output
+    group = resolve_backbone_group(cfg.network)
+    ts = datetime.now().strftime("%y%m%d_%H%M")
+    # ví dụ: runs/fan_ffm/r50_fan/250913_2130
+    return os.path.join(base_dir, group, cfg.network, ts)
+
+def validate_config(cfg):
+    missing = [k for k in REQUIRED_KEYS if k not in cfg]
+    return missing
+
+def print_required_args_help():
+    print("\n[train_v2 helper] Required config keys used by train_v2:")
+    for k in REQUIRED_KEYS:
+        print("  -", k)
+    print("\nOptional (commonly used) config keys:")
+    for k in OPTIONAL_KEYS:
+        print("  -", k)
+    print("\nTip: Use `-c/--config` to pass a Python edict config (see --dump-config-template).")
+
+def dump_minimal_template(path=None):
+    from textwrap import dedent
+    tpl = dedent(f"""\
+    from easydict import EasyDict as edict
+    import torch
+    config = edict()
+
+    # ---- Backbone & loss ----
+    config.network = "r50"            # e.g., r50, r50_fan, r50_custom_v2, vit_t
+    config.margin_list = (1.0, 0.5, 0.0)
+    config.embedding_size = 512
+
+    # ---- Dataset / schedule ----
+    config.rec = "faces_webface_112x112"
+    config.num_classes = 21083
+    config.num_image = 501196
+    config.num_epoch = 20
+    config.warmup_epoch = 0
+    config.seed = 2048
+    config.num_workers = 2
+
+    # ---- Optimization ----
+    config.optimizer = "sgd"          # or "adamw"
+    config.lr = 0.1
+    config.weight_decay = 5e-4
+    config.batch_size = 128
+    config.momentum = 0.9
+    config.gradient_acc = 1
+
+    # ---- Runtime ----
+    config.fp16 = False
+    config.resume = False
+    config.save_all_states = False
+    config.output = None              # auto-resolve to runs/<group>/<net>/<ts> if None
+    config.sample_rate = 1.0
+    config.interclass_filtering_threshold = 0
+
+    # ---- Logging / eval ----
+    config.verbose = 2000
+    config.frequent = 10
+    config.val_targets = ['lfw', 'cfp_fp', 'agedb_30']
+
+    # ---- DALI (optional) ----
+    config.dali = False
+    config.dali_aug = False
+
+    # ---- Weights & Biases (optional) ----
+    config.using_wandb = False
+    config.wandb_key = "XXXX"
+    config.wandb_entity = "entity"
+    config.wandb_project = "project"
+    config.wandb_log_all = True
+    config.save_artifacts = False
+    config.wandb_resume = False
+    config.suffix_run_name = None
+    config.notes = ""
+    """)
+    if path:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(tpl)
+        print(f"[train_v2 helper] Wrote minimal template to: {path}")
+    else:
+        print(tpl)
 
 def main(args):
 
@@ -253,6 +376,69 @@ def main(args):
 if __name__ == "__main__":
     torch.backends.cudnn.benchmark = True
     parser = argparse.ArgumentParser(
-        description="Distributed Arcface Training in Pytorch")
-    parser.add_argument("config", type=str, help="py config file")
-    main(parser.parse_args())
+        description="Distributed ArcFace Training in PyTorch",
+        epilog=(
+            "Examples:\n"
+            "  python train_v2.py -c configs/base.py --print-required\n"
+            "  python train_v2.py -c configs/base.py --dump-config-template template_base.py\n"
+            "  python train_v2.py -c configs/res50_ffm_onegpu.py --dry-run\n"
+            "  python train_v2.py -c configs/res50_ffm_onegpu.py\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "-c", "--config",
+        type=str,
+        required=True,
+        help="Path to the Python config file (edict named `config`)."
+    )
+    parser.add_argument(
+        "--print-required", action="store_true",
+        help="Print required and optional config keys that train_v2 uses and exit."
+    )
+    parser.add_argument(
+        "--dump-config-template", nargs="?", const=True, metavar="PATH",
+        help="Print a minimal config template to stdout, or write to PATH if provided."
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true",
+        help="Validate config and show resolved output folder (by backbone group), then exit."
+    )
+
+    args = parser.parse_args()
+
+    if args.print_required:
+        print_required_args_help()
+        raise SystemExit(0)
+
+    if args.dump_config_template is not None:
+        # if user provided a path string -> write file, else print to stdout
+        if isinstance(args.dump_config_template, str):
+            dump_minimal_template(args.dump_config_template)
+        else:
+            dump_minimal_template(None)
+        raise SystemExit(0)
+
+    # load & validate config early (without starting training)
+    cfg = get_config(args.config)
+    missing = validate_config(cfg)
+    if missing:
+        print("[train_v2 helper] Missing required config keys:")
+        for k in missing:
+            print("  -", k)
+        raise SystemExit(2)
+
+    # resolve output folder if not provided, based on backbone group
+    if not getattr(cfg, "output", None):
+        cfg.output = resolve_output_path(cfg)
+        print(f"[train_v2 helper] Resolved output to: {cfg.output}")
+
+    if args.dry_run:
+        group = resolve_backbone_group(cfg.network)
+        print(f"[train_v2 helper] Backbone: {cfg.network}  -> group: {group}")
+        print(f"[train_v2 helper] Output dir: {cfg.output}")
+        raise SystemExit(0)
+
+    os.makedirs(cfg.output, exist_ok=True)
+
+    main(args)
