@@ -32,11 +32,11 @@ Before running inference, prepare your **facebank** (the database of known ident
 ```
 facebank/
 ├── Alice/        # one folder per person
-│   │   ├── 1.jpg
-│   │   └── 2.jpg
-│   └── Bob/
-│       ├── 1.jpg
-│       └── 2.jpg 
+│     ├── 1.jpg
+│     └── 2.jpg
+├── Bob/
+│     ├── 1.jpg
+│     └── 2.jpg 
 └── ...
 ```
 
