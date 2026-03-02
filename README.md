@@ -14,6 +14,9 @@ Create and activate the environment with **conda**:
 conda create -n face_recog python=3.10.18 -y
 conda activate face_recog
 
+conda install cmake cython -y
+conda install anaconda::mxnet -y
+
 pip install --upgrade pip
 pip install -r requirements.txt
 ```
