@@ -1,66 +1,225 @@
-import cv2
-from PIL import Image
-import torch
-from typing import Dict, List, Tuple, Any
+import csv
+import threading
+import time
+from collections import deque
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Tuple
 
-from infer_learner import face_learner
+import cv2
+import torch
+from PIL import Image
+
 from face_detector import FaceDetector
+from infer_learner import face_learner
 from utils.utils_facebank import (
-    load_facebank, prepare_facebank, _arch_dir, _facebank_file
+    _arch_dir, _facebank_file, load_facebank, prepare_facebank,
 )
 
-# ====== Module state ======
-conf = None               # config
-yolo = None               # detector
-learner = None            # face_learner
-targets = torch.empty(0)  # facebank embeddings
-names: Dict[int, str] = {}  # id -> name
+# ──────────────────────────────────────────────────────────────
+#  PresenceLogger
+#  Toàn bộ logic theo dõi / CSV nằm ở đây.
+#  fastapi-app.py không cần biết gì về CSV.
+# ──────────────────────────────────────────────────────────────
 
-# ----- Runtime setters/getters -----
+class PresenceLogger:
+    """
+    Theo dõi sự hiện diện từng người qua các frame.
+
+    Chống nhiễu camera bằng sliding-window:
+      - Chỉ xác nhận "xuất hiện"  khi tên PASSED liên tiếp >= CONFIRM_FRAMES
+      - Chỉ xác nhận "biến mất"   khi PASSED = 0 liên tiếp  >= ABSENT_FRAMES
+      Điều này loại trừ trường hợp 1 frame Unknown xen giữa nhiều frame PASSED.
+
+    Vắng mặt > ABSENCE_ALERT_MINUTES => cột absence_alert = True trong CSV.
+    """
+
+    CONFIRM_FRAMES        = 4    # frame PASSED liên tiếp để coi là "xuất hiện"
+    ABSENT_FRAMES         = 8    # frame không-PASSED liên tiếp để coi là "biến mất"
+    ABSENCE_ALERT_MINUTES = 30   # ngưỡng gắn cờ absent_alert
+
+    # Cột CSV
+    _HEADERS = [
+        "name",
+        "event_type",        # "appeared" | "disappeared"
+        "datetime",
+        "timestamp",
+        "absence_alert",     # True nếu khoảng vắng > 30 phút (chỉ có ở "disappeared")
+        "absence_minutes",   # thời gian vắng mặt tính bằng phút  (chỉ có ở "disappeared")
+    ]
+
+    def __init__(self, log_dir: str = "logs"):
+        self._log_path = Path(log_dir) / "presence_log.csv"
+        self._log_path.parent.mkdir(parents=True, exist_ok=True)
+
+        self._lock = threading.Lock()
+
+        # Khởi tạo file CSV (chỉ ghi header nếu chưa có)
+        if not self._log_path.exists():
+            with open(self._log_path, "w", newline="", encoding="utf-8") as f:
+                csv.DictWriter(f, fieldnames=self._HEADERS).writeheader()
+
+        # Trạng thái mỗi người:
+        #   "window"      : deque[bool]  — lịch sử PASSED/không-PASSED gần nhất
+        #   "is_present"  : bool
+        #   "appeared_at" : float | None — timestamp lúc xác nhận xuất hiện
+        #   "last_seen"   : float | None — timestamp frame PASSED cuối cùng
+        self._state: Dict[str, dict] = {}
+
+    # ── public API ────────────────────────────────────────────
+
+    def update(self, recognition_data: Dict[str, Any]) -> None:
+        """
+        Gọi sau mỗi frame được infer.
+        recognition_data = dict trả về từ recognize_faces_and_locs().
+        """
+        now = time.time()
+
+        # Tập hợp tên PASSED trong frame này (bỏ Unknown)
+        passed_names: set = set()
+        for rec in recognition_data.values():
+            if rec.get("passed_threshold") and rec.get("name", "Unknown") != "Unknown":
+                passed_names.add(rec["name"])
+
+        with self._lock:
+            # Cập nhật window cho tất cả người đã biết + người mới
+            all_names = passed_names | {n for n, s in self._state.items() if s["is_present"]}
+
+            for name in all_names:
+                s = self._get_state(name)
+                seen_this_frame = (name in passed_names)
+
+                if seen_this_frame:
+                    s["last_seen"] = now
+
+                s["window"].append(seen_this_frame)
+
+                if not s["is_present"]:
+                    # Kiểm tra xác nhận "xuất hiện"
+                    if self._all_true_recent(s["window"], self.CONFIRM_FRAMES):
+                        s["is_present"]  = True
+                        s["appeared_at"] = now
+                        self._write_row(name, "appeared", now)
+                else:
+                    # Kiểm tra xác nhận "biến mất"
+                    if self._all_false_recent(s["window"], self.ABSENT_FRAMES):
+                        s["is_present"] = False
+                        absence_minutes = self._absence_minutes(s["appeared_at"], s["last_seen"])
+                        alert           = absence_minutes is not None and absence_minutes >= self.ABSENCE_ALERT_MINUTES
+                        self._write_row(
+                            name, "disappeared", s["last_seen"] or now,
+                            absence_minutes=absence_minutes,
+                            absence_alert=alert,
+                        )
+
+    @property
+    def csv_path(self) -> str:
+        return str(self._log_path)
+
+    # ── internal helpers ──────────────────────────────────────
+
+    def _get_state(self, name: str) -> dict:
+        if name not in self._state:
+            self._state[name] = {
+                "window":      deque(maxlen=max(self.CONFIRM_FRAMES, self.ABSENT_FRAMES) + 2),
+                "is_present":  False,
+                "appeared_at": None,
+                "last_seen":   None,
+            }
+        return self._state[name]
+
+    @staticmethod
+    def _all_true_recent(window: deque, n: int) -> bool:
+        """Kiểm tra n phần tử cuối đều True."""
+        tail = list(window)[-n:]
+        return len(tail) == n and all(tail)
+
+    @staticmethod
+    def _all_false_recent(window: deque, n: int) -> bool:
+        """Kiểm tra n phần tử cuối đều False."""
+        tail = list(window)[-n:]
+        return len(tail) == n and not any(tail)
+
+    @staticmethod
+    def _absence_minutes(appeared_at: float, last_seen: float) -> float | None:
+        if appeared_at is None or last_seen is None:
+            return None
+        duration_sec = max(0.0, last_seen - appeared_at)
+        return round(duration_sec / 60, 2)
+
+    def _write_row(
+        self,
+        name: str,
+        event_type: str,
+        ts: float,
+        absence_minutes: float | None = None,
+        absence_alert: bool = False,
+    ) -> None:
+        row = {
+            "name":            name,
+            "event_type":      event_type,
+            "datetime":        datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S"),
+            "timestamp":       round(ts, 3),
+            "absence_alert":   absence_alert   if event_type == "disappeared" else "",
+            "absence_minutes": absence_minutes if event_type == "disappeared" else "",
+        }
+        with open(self._log_path, "a", newline="", encoding="utf-8") as f:
+            csv.DictWriter(f, fieldnames=self._HEADERS).writerow(row)
+
+
+# ──────────────────────────────────────────────────────────────
+#  Module state
+# ──────────────────────────────────────────────────────────────
+conf    = None
+yolo    = None
+learner = None
+targets = torch.empty(0)
+names: Dict[int, str] = {}
+
+_presence_logger: PresenceLogger | None = None
+
+# ── Runtime setters/getters ───────────────────────────────────
+
 def set_threshold(val: float) -> float:
-    """Set the recognition threshold in the learner and return the current value."""
     global learner
     if learner is not None:
         learner.threshold = float(val)
     return float(get_threshold())
 
 def set_tta(enabled: bool) -> bool:
-    """Enable/disable test-time augmentation in config and return current state."""
     global conf
     if conf is not None:
         conf.tta = bool(enabled)
     return bool(getattr(conf, "tta", False))
 
 def get_threshold() -> float:
-    """Return current threshold; 0.0 if learner not ready."""
     return float(learner.threshold) if learner is not None else 0.0
 
-# ----- Initialization & facebank -----
+# ── Initialization & facebank ─────────────────────────────────
+
 def _need_rebuild_facebank(embs: torch.Tensor) -> bool:
-    """Rebuild if embeddings missing or dimension mismatch."""
     if (not isinstance(embs, torch.Tensor)) or embs.numel() == 0:
         return True
     emb_dim = embs.shape[1]
     cfg_dim = int(getattr(conf, "embedding_size", emb_dim))
     return emb_dim != cfg_dim
 
+
 def initialize(cfg, update_facebank: bool = False) -> None:
-    """Initialize detector, model, and facebank."""
-    global conf, yolo, learner, targets, names
+    global conf, yolo, learner, targets, names, _presence_logger
+
     conf = cfg
     if not hasattr(conf, "device"):
         conf.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    # Force FP32 at runtime
     conf.fp16 = False
 
-    # Detector
     yolo = FaceDetector()
 
-    # Embedding model (FP32)
     learner = face_learner(conf)
     learner.threshold = float(getattr(conf, "threshold", 1.54))
-    model_file = conf.model_file if getattr(conf, "device", torch.device("cpu")).type != "cpu" else conf.cpu_model_file
+    model_file = (conf.model_file
+                  if getattr(conf, "device", torch.device("cpu")).type != "cpu"
+                  else conf.cpu_model_file)
     learner.load_state(conf, model_file)
     learner.model.eval()
     if hasattr(learner.model, "fp16"):
@@ -69,7 +228,6 @@ def initialize(cfg, update_facebank: bool = False) -> None:
         except Exception:
             pass
 
-    # Facebank load/prepare
     if update_facebank:
         t, n = prepare_facebank(conf, learner.model, yolo, tta=getattr(conf, "tta", False))
     else:
@@ -78,7 +236,6 @@ def initialize(cfg, update_facebank: bool = False) -> None:
     if isinstance(t, torch.Tensor):
         t = t.to(conf.device).float()
 
-    # Check compatibility -> rebuild if needed
     if _need_rebuild_facebank(t):
         t, n = prepare_facebank(conf, learner.model, yolo, tta=getattr(conf, "tta", False))
         if isinstance(t, torch.Tensor):
@@ -86,8 +243,12 @@ def initialize(cfg, update_facebank: bool = False) -> None:
 
     targets, names = t, n
 
+    # Khởi tạo logger (log_dir có thể override qua conf nếu cần)
+    log_dir = str(getattr(conf, "log_dir", "logs"))
+    _presence_logger = PresenceLogger(log_dir=log_dir)
+
+
 def reload_facebank() -> Tuple[bool, str]:
-    """Rebuild facebank using current detector + model (honors conf.tta)."""
     global targets, names
     if conf is None or learner is None or yolo is None:
         return False, "face_verify is not initialized"
@@ -110,159 +271,145 @@ def reload_facebank() -> Tuple[bool, str]:
     except Exception as e:
         return False, f"Reload facebank failed: {e}"
 
+
 def facebank_info() -> Dict[str, Any]:
-    """Return current facebank/model info for UI."""
     import os
     if conf is None or learner is None:
         return {"error": "face_verify not initialized"}
-
     try:
-        arch_dir = _arch_dir(conf, learner.model)
-        fb_file = _facebank_file(conf, learner.model)
-        conv1_in = int(getattr(getattr(learner.model, "conv1", None), "in_channels", 0))
+        arch_dir  = _arch_dir(conf, learner.model)
+        fb_file   = _facebank_file(conf, learner.model)
+        conv1_in  = int(getattr(getattr(learner.model, "conv1", None), "in_channels", 0))
         ids = (list(names.values()) if isinstance(names, dict)
                else (list(names) if isinstance(names, (list, tuple)) else []))
         return {
-            "network": getattr(conf, "network", None),
-            "threshold": float(get_threshold()),
-            "use_ffm": bool(getattr(learner.model, "use_ffm", False)),
-            "conv1_in": conv1_in,
-            "facebank_dir": str(arch_dir),
-            "facebank_file": str(fb_file),
+            "network":         getattr(conf, "network", None),
+            "threshold":       float(get_threshold()),
+            "use_ffm":         bool(getattr(learner.model, "use_ffm", False)),
+            "conv1_in":        conv1_in,
+            "facebank_dir":    str(arch_dir),
+            "facebank_file":   str(fb_file),
             "facebank_exists": os.path.isfile(fb_file),
-            "targets_shape": None if not isinstance(targets, torch.Tensor) else tuple(targets.shape),
-            "num_identities": len(ids),
-            "names": ids,
+            "targets_shape":   None if not isinstance(targets, torch.Tensor) else tuple(targets.shape),
+            "num_identities":  len(ids),
+            "names":           ids,
         }
     except Exception as e:
         return {"error": str(e)}
 
-# ----- App (merged flows) -----
+
+# ──────────────────────────────────────────────────────────────
+#  FaceVerificationApp
+# ──────────────────────────────────────────────────────────────
+
 class FaceVerificationApp:
     def __init__(self, width: int = 800, height: int = 800):
-        self.width = width
+        self.width  = width
         self.height = height
         self.last_recognition_results: Dict[str, Any] = {}
 
     def _targets_on_device(self) -> torch.Tensor:
-        """Ensure targets are on the correct device before inference."""
         global targets
         if isinstance(targets, torch.Tensor) and targets.device != conf.device:
             targets = targets.to(conf.device).float()
         return targets
 
     def _idx_to_name(self, ridx: int) -> str:
-        """Map index in targets (0..P-1) to display name from `names`."""
         global names
         if isinstance(names, dict):
             if len(names) == 0:
                 return "Unknown"
-            # direct index if key exists
             if ridx in names:
                 return names[ridx]
-            # fallback: sorted by key order
             keys_sorted = sorted(names.keys())
             if 0 <= ridx < len(keys_sorted):
                 return names[keys_sorted[ridx]]
             return "Unknown"
-
         if isinstance(names, (list, tuple)):
             if 0 <= ridx < len(names):
                 return names[ridx]
             return "Unknown"
-
         return "Unknown"
 
     def recognize_faces_and_locs(self, frame) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         """
-        Single entry point: return (face_locations_list, recognition_data_dict)
+        Nhận dạng khuôn mặt, cập nhật presence logger, trả về kết quả cho caller.
 
-        face_locations_list: [{"id": "face_i", "bbox": [x1,y1,x2,y2]}, ...]
-        recognition_data_dict: {
-            "face_i": {
-                "name": str,
-                "distance": float,
-                "passed_threshold": bool,
-                "name_top1": str,
-                "threshold": float,
-                "confidence": float
-            }, ...
-        }
+        Returns
+        -------
+        face_locations : list[{"id": str, "bbox": [x1,y1,x2,y2]}]
+        recognition_data : dict{ face_id: { name, distance, passed_threshold,
+                                            name_top1, threshold, confidence } }
         """
-        face_locations: List[Dict[str, Any]] = []
-        recognition_data: Dict[str, Any] = {}
+        face_locations:   List[Dict[str, Any]] = []
+        recognition_data: Dict[str, Any]       = {}
 
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         try:
             image = Image.fromarray(rgb_frame)
-            res = yolo.align_multi(image, getattr(conf, "face_limit", 10), getattr(conf, "min_face_size", 30))
+            res   = yolo.align_multi(image,
+                                     getattr(conf, "face_limit", 10),
+                                     getattr(conf, "min_face_size", 30))
             if res is None:
-                self.last_recognition_results = recognition_data
+                self._log_and_store(recognition_data)
                 return face_locations, recognition_data
 
             bboxes, faces = res
             if faces is None or len(faces) == 0:
-                self.last_recognition_results = recognition_data
+                self._log_and_store(recognition_data)
                 return face_locations, recognition_data
 
-            # bboxes: ndarray (N, 5) with score at -1; we draw first 4 ints
-            bboxes_draw = (bboxes[:, :4].astype(int))
+            bboxes_draw = bboxes[:, :4].astype(int)
 
-            # build locs
             for idx, bbox in enumerate(bboxes_draw):
                 face_locations.append({"id": f"face_{idx}", "bbox": bbox.tolist()})
 
-            # infer
-            tgt = self._targets_on_device()
+            tgt               = self._targets_on_device()
             results, distances = learner.infer(conf, faces, tgt, getattr(conf, "tta", False))
 
             for idx, _ in enumerate(bboxes_draw):
                 face_id = f"face_{idx}"
-                # distance safeguard
-                if isinstance(distances, torch.Tensor) and distances.numel() > idx:
-                    distance = float(distances[idx])
-                else:
-                    distance = 9.99
 
-                # index (thresholded already)
-                if isinstance(results, torch.Tensor) and results.numel() > idx:
-                    idx_thr = int(results[idx])
-                else:
-                    idx_thr = -1
+                distance = (float(distances[idx])
+                            if isinstance(distances, torch.Tensor) and distances.numel() > idx
+                            else 9.99)
 
-                # top1 name (same as idx_thr because infer() already applied threshold for idx)
-                name_top1 = self._idx_to_name(idx_thr) if idx_thr >= 0 else "Unknown"
+                idx_thr  = (int(results[idx])
+                            if isinstance(results, torch.Tensor) and results.numel() > idx
+                            else -1)
 
-                passed = (idx_thr >= 0 and distance <= float(learner.threshold))
-                name = name_top1 if passed else "Unknown"
-
-                # rough confidence proxy from distance
-                confidence = max(0.0, 1.0 - (distance / (float(learner.threshold) * 2.0)))
+                name_top1  = self._idx_to_name(idx_thr) if idx_thr >= 0 else "Unknown"
+                passed     = idx_thr >= 0 and distance <= float(learner.threshold)
+                name       = name_top1 if passed else "Unknown"
+                confidence = max(0.0, 1.0 - distance / (float(learner.threshold) * 2.0))
 
                 recognition_data[face_id] = {
-                    "name": name,
-                    "distance": distance,
+                    "name":             name,
+                    "distance":         distance,
                     "passed_threshold": passed,
-                    "name_top1": name_top1,
-                    "threshold": float(learner.threshold),
-                    "confidence": confidence,
+                    "name_top1":        name_top1,
+                    "threshold":        float(learner.threshold),
+                    "confidence":       confidence,
                 }
 
-                # ---- Terminal logging of recognition result ----
-                try:
-                    nm = recognition_data[face_id].get("name_top1", recognition_data[face_id].get("name", "Unknown"))
-                    dist = float(recognition_data[face_id].get("distance", 0.0))
-                    thr = float(learner.threshold)
-                    ok = bool(recognition_data[face_id].get("passed_threshold", False))
-                    print(f"[recognize] {nm} | dist={dist:.3f} | thr={thr:.3f} | {'PASSED' if ok else 'not passed'}")
-                except Exception:
-                    pass
+                print(f"[recognize] {name_top1} | dist={distance:.3f} "
+                      f"| thr={learner.threshold:.3f} "
+                      f"| {'PASSED' if passed else 'not passed'}")
 
-            # update last results on success path
-            self.last_recognition_results = recognition_data
+            self._log_and_store(recognition_data)
 
         except Exception:
-            # fail-closed: return empty results
-            self.last_recognition_results = recognition_data
+            self._log_and_store(recognition_data)
 
         return face_locations, recognition_data
+
+    # ── internal ─────────────────────────────────────────────
+
+    def _log_and_store(self, recognition_data: Dict[str, Any]) -> None:
+        """Cập nhật presence logger và lưu kết quả cuối."""
+        self.last_recognition_results = recognition_data
+        if _presence_logger is not None:
+            try:
+                _presence_logger.update(recognition_data)
+            except Exception:
+                pass
