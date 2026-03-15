@@ -5,7 +5,7 @@ This project provides a FastAPI-based server for **real-time face detection and 
 ---
 
 ## Environment Setup
-
+- Platforms: Linux or MacOS
 - Python version: **3.10.18**
 
 Create and activate the environment with **conda**:
