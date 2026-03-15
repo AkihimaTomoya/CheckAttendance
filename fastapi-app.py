@@ -17,7 +17,6 @@ MODEL_NAME_HINTS = [
     ("res50_ffm",     "r50_ffm"),
     ("r100",          "r100"),
 ]
-
 MODEL_BEST_THRESHOLDS = {
     "r50":           1.7,
     "res50_ffm":     1.56,
@@ -28,7 +27,6 @@ MODEL_BEST_THRESHOLDS = {
 }
 
 def apply_model_overrides(cfg, model_dir: str):
-    """Infer network/threshold from folder name and override cfg."""
     dir_name = Path(model_dir).name.lower()
     for key, net in MODEL_NAME_HINTS:
         if key in dir_name:
@@ -39,29 +37,25 @@ def apply_model_overrides(cfg, model_dir: str):
 
 # --- CLI ---
 parser = argparse.ArgumentParser(description="FastAPI Face Recognition Server")
-parser.add_argument("-c", "--config", default="configs/infer.py", help="Path to inference config.")
-parser.add_argument("-d", "--model-dir", type=str, default=None, help="Override config.output.")
-parser.add_argument("--host", default="0.0.0.0", help="Bind host")
-parser.add_argument("--port", type=int, default=5050, help="Bind port")
+parser.add_argument("-c", "--config",    default="configs/infer.py")
+parser.add_argument("-d", "--model-dir", type=str, default=None)
+parser.add_argument("--host",            default="0.0.0.0")
+parser.add_argument("--port",            type=int, default=5050)
 args = parser.parse_args()
 
-# Load config
 config = get_config(args.config)
 if not hasattr(config, "device"):
     config.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# Optional model-dir override
 if args.model_dir:
     config.output = args.model_dir
     apply_model_overrides(config, args.model_dir)
 
-# Import face_verify and init
 try:
     import importlib
     face_verify = importlib.import_module("face_verify")
     face_verify.initialize(config, update_facebank=True)
-
-    FaceVerificationApp = face_verify.FaceVerificationApp
+    FaceVerificationApp  = face_verify.FaceVerificationApp
     face_verification_app = FaceVerificationApp()
 except Exception as e:
     traceback.print_exc()
@@ -70,17 +64,16 @@ except Exception as e:
 # --- FastAPI App ---
 app = FastAPI(title="Face Recognition API", version="1.0.0")
 
-# Static files (optional)
 try:
     app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
 except Exception:
     pass
 
-# UI config sent to client
 ui_config = {
-    "show_bbox": True,
+    "show_bbox":  True,
     "show_label": True,
-    "threshold": float(face_verify.get_threshold()) if face_verification_app else float(getattr(config, "threshold", 1.54)),
+    "threshold":  float(face_verify.get_threshold()) if face_verification_app
+                  else float(getattr(config, "threshold", 1.54)),
 }
 
 class SetThreshold(BaseModel):
@@ -91,23 +84,19 @@ class SetTTA(BaseModel):
 # --- WebSocket Connection Manager ---
 class ConnectionManager:
     def __init__(self): self.active_connections: List[WebSocket] = []
-    async def connect(self, websocket: WebSocket):
-        await websocket.accept()
-        self.active_connections.append(websocket)
-    def disconnect(self, websocket: WebSocket):
-        if websocket in self.active_connections:
-            self.active_connections.remove(websocket)
-    async def send_personal_message(self, message: dict, websocket: WebSocket):
-        try: await websocket.send_text(json.dumps(message))
-        except Exception:
-            self.disconnect(websocket)
-    async def broadcast(self, message: dict):
-        disconnected = []
-        for conn in self.active_connections:
-            try: await conn.send_text(json.dumps(message))
-            except Exception:
-                disconnected.append(conn)
-        for c in disconnected: self.disconnect(c)
+    async def connect(self, ws: WebSocket):
+        await ws.accept(); self.active_connections.append(ws)
+    def disconnect(self, ws: WebSocket):
+        if ws in self.active_connections: self.active_connections.remove(ws)
+    async def send_personal_message(self, msg: dict, ws: WebSocket):
+        try: await ws.send_text(json.dumps(msg))
+        except Exception: self.disconnect(ws)
+    async def broadcast(self, msg: dict):
+        dead = []
+        for c in self.active_connections:
+            try: await c.send_text(json.dumps(msg))
+            except Exception: dead.append(c)
+        for c in dead: self.disconnect(c)
 
 manager = ConnectionManager()
 
@@ -133,16 +122,15 @@ async def reload_facebank_endpoint():
     if not face_verification_app:
         return {"status": "error", "message": "Face verification app not initialized"}
     ok, message = face_verify.reload_facebank()
-    status = "success" if ok else "error"
-    return {"status": status, "message": message}
+    return {"status": "success" if ok else "error", "message": message}
 
 @app.get("/status")
 async def get_status():
     return {
-        "status": "success",
-        "app_initialized": face_verification_app is not None,
+        "status":             "success",
+        "app_initialized":    face_verification_app is not None,
         "active_connections": len(manager.active_connections),
-        "config": ui_config
+        "config":             ui_config,
     }
 
 @app.post("/set-threshold")
@@ -162,7 +150,12 @@ async def set_tta_api(req: SetTTA):
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-# Serve HTML
+@app.get("/presence")
+async def get_presence_log_path():
+    """Trả về đường dẫn file CSV presence log."""
+    csv_path = getattr(face_verify._presence_logger, "csv_path", None) if face_verification_app else None
+    return {"status": "success", "csv_path": csv_path}
+
 @app.get("/", response_class=HTMLResponse)
 async def get_index():
     try:
@@ -170,8 +163,7 @@ async def get_index():
         if html_path.exists():
             with open(html_path, "r", encoding="utf-8") as f:
                 return HTMLResponse(content=f.read())
-        else:
-            return HTMLResponse(content="<h1>Face Recognition Server</h1><p>Template missing.</p>")
+        return HTMLResponse(content="<h1>Face Recognition Server</h1><p>Template missing.</p>")
     except Exception as e:
         return HTMLResponse(content=f"<h1>Error</h1><pre>{e}</pre>")
 
@@ -186,7 +178,8 @@ async def websocket_endpoint(websocket: WebSocket):
         while True:
             data = await websocket.receive_text()
             if not face_verification_app:
-                await manager.send_personal_message({"type": "error", "data": "Face verification app not initialized"}, websocket)
+                await manager.send_personal_message(
+                    {"type": "error", "data": "Face verification app not initialized"}, websocket)
                 continue
             await process_frame(websocket, data)
     except WebSocketDisconnect:
@@ -198,42 +191,37 @@ async def websocket_endpoint(websocket: WebSocket):
 async def process_frame(websocket: WebSocket, data: str):
     global frame_skip_counter
     try:
-        # Decode base64 image
-        encoded = data.split(",", 1)[1] if "," in data else data
+        encoded  = data.split(",", 1)[1] if "," in data else data
         img_data = base64.b64decode(encoded)
-        np_arr = np.frombuffer(img_data, np.uint8)
-        frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+        np_arr   = np.frombuffer(img_data, np.uint8)
+        frame    = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
         if frame is None:
             return
 
-        # Skip to reduce load (process every 2nd frame)
         frame_skip_counter += 1
         if frame_skip_counter % 2 != 0:
             return
 
-        # Get locations + recognition in one pass
         locs, recognition_data = face_verification_app.recognize_faces_and_locs(frame)
+        # ↑ presence logging xảy ra bên trong recognize_faces_and_locs() rồi
 
-        # Send single combined packet (avoids client-side race)
         await manager.send_personal_message({
             "type": "frame_result",
             "locs": locs,
             "data": recognition_data,
-            "meta": {"threshold": float(face_verify.get_threshold())}
+            "meta": {"threshold": float(face_verify.get_threshold())},
         }, websocket)
 
-        # Optional: let client toggle spinners
         await manager.send_personal_message({"type": "infer_status", "data": "done"}, websocket)
 
     except Exception:
         traceback.print_exc()
 
-# Health check
 @app.get("/health")
 async def health_check():
     return {
-        "status": "healthy",
-        "timestamp": time.time(),
+        "status":          "healthy",
+        "timestamp":       time.time(),
         "app_initialized": face_verification_app is not None,
     }
 
@@ -242,4 +230,3 @@ if __name__ == "__main__":
         uvicorn.run(app, host=args.host, port=args.port, log_level="info", access_log=True)
     except Exception:
         traceback.print_exc()
-
