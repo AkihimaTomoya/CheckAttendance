@@ -1,258 +1,206 @@
 document.addEventListener('DOMContentLoaded', () => {
-  // ---------- DOM helpers ----------
-  const $ = (id) => document.getElementById(id);
-  const video = $('videoStream');
-  const canvas = $('canvasOverlay');
-  const ctx = canvas.getContext('2d');
 
-  const overlayChk = $('overlayChk');
-  const toggleCameraBtn = $('toggleCameraBtn');
+  // ---------- DOM ----------
+  const $ = (id) => document.getElementById(id);
+  const video             = $('videoStream');
+  const canvas            = $('canvasOverlay');
+  const ctx               = canvas.getContext('2d');
+  const overlayChk        = $('overlayChk');
+  const toggleCameraBtn   = $('toggleCameraBtn');
   const reloadFacebankBtn = $('reloadFacebankBtn');
-  const connectionStatus = $('connectionStatus');
-  const statusLine = $('status');
-  const debugLine = $('debugLine');
+  const connectionStatus  = $('connectionStatus');
+  const statusLine        = $('status');
+  const debugLine         = $('debugLine');
 
   // ---------- State ----------
-  let ws = null;
-  let streaming = false;
-  let overlayOn = overlayChk ? overlayChk.checked : true;
-  let frameRAF = null;
+  let ws         = null;
+  let streaming  = false;
+  let overlayOn  = overlayChk ? overlayChk.checked : true;
   let overlayRAF = null;
-  let lastLocs = [];
-  let recogMap = {};
-  let srcW = 0, srcH = 0;
-  let lastSend = 0;
-  const SEND_INTERVAL_MS = 120; // throttle WS frame sends
+  let lastLocs     = [];
+  let lastRecogMap = {};
 
-  // ---------- UI helpers ----------
-  function setPill(text, cls) {
-    connectionStatus.textContent = text;
-    connectionStatus.className = 'pill ' + (cls || '');
-  }
+  const SEND_INTERVAL_MS = 120;
 
-  function setStatus(text, cls) {
-    if (!statusLine) return;
-    statusLine.textContent = text || '';
-    statusLine.className = 'status-badge' + (cls ? ' ' + cls : '');
-    statusLine.title = text || '';
-  }
+  // Canvas tái sử dụng để capture frame — không tạo mới mỗi lần gửi
+  let capCanvas = null;
+  let capCtx    = null;
 
-  function setDebug(text, cls) {
-    if (!debugLine) return;
-    const t = text || '';
-    debugLine.textContent = t;
-    debugLine.className = 'status-badge debug-badge' + (cls ? ' ' + cls : '');
-    debugLine.title = t; // hover để xem full, UI vẫn ellipsis
-  }
+  // ---------- UI ----------
+  const setPill   = (t, c) => { connectionStatus.textContent = t; connectionStatus.className = 'pill ' + (c || ''); };
+  const setStatus = (t, c) => { if (!statusLine) return; statusLine.textContent = t || ''; statusLine.className = 'status-badge' + (c ? ' '+c : ''); statusLine.title = t || ''; };
+  const setDebug  = (t, c) => { if (!debugLine)  return; debugLine.textContent  = t || ''; debugLine.className  = 'status-badge debug-badge' + (c ? ' '+c : ''); debugLine.title = t || ''; };
 
-  // ---------- Canvas & drawing ----------
-  function fitCanvasToVideo() {
-    const w = video.videoWidth || video.clientWidth || 800;
-    const h = video.videoHeight || video.clientHeight || 600;
-    if (canvas.width !== w) canvas.width = w;
+  // ---------- Canvas sizing ----------
+  function syncCanvas() {
+    const w = video.videoWidth;
+    const h = video.videoHeight;
+    if (!w || !h) return false;
+    if (canvas.width !== w)  canvas.width  = w;
     if (canvas.height !== h) canvas.height = h;
+    return true;
   }
 
+  // ---------- Draw loop ----------
+  // Video element hiển thị live feed bình thường.
+  // Canvas overlay chỉ vẽ bbox — không vẽ lại frame video.
   function drawOverlay() {
     if (!streaming) return;
-    fitCanvasToVideo();
+
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    if (!overlayOn) {
-      setStatus('Camera is on (overlay hidden)', 'warn');
-      overlayRAF = requestAnimationFrame(drawOverlay);
-      return;
-    }
-
-    const faces = Array.isArray(lastLocs) ? lastLocs : [];
-    if (faces.length > 0) {
-      setStatus(`Tracking ${faces.length} face(s)`, 'ok');
-    } else {
-      setStatus('Waiting for frames…', 'warn');
-    }
-
-    const sw = srcW || canvas.width;
-    const sh = srcH || canvas.height;
-    const sx = canvas.width / sw;
-    const sy = canvas.height / sh;
-
-    for (const loc of faces) {
-      let [x1, y1, x2, y2] = loc.bbox;
-      x1 = Math.round(x1 * sx);
-      y1 = Math.round(y1 * sy);
-      x2 = Math.round(x2 * sx);
-      y2 = Math.round(y2 * sy);
-
-      const rec = recogMap[loc.id] || {};
-      const name = rec.name || rec.name_top1 || 'Unknown';
-
-      ctx.lineWidth = 2;
-      if (name === 'Unknown') {
-        ctx.strokeStyle = '#ef4444'; // đỏ
-        ctx.fillStyle = '#ef4444';
+    if (overlayOn) {
+      const faces = lastLocs;
+      if (faces.length > 0) {
+        setStatus(`Tracking ${faces.length} face(s)`, 'ok');
       } else {
-        ctx.strokeStyle = '#10b981'; // xanh
-        ctx.fillStyle = '#10b981';
+        setStatus('Waiting for frames…', 'warn');
       }
-      ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
 
-      const label = name;
-      ctx.font = '14px ui-sans-serif, system-ui';
-      const tw = ctx.measureText(label).width;
-      const ly = Math.max(0, y1 - 22);
-      ctx.fillRect(x1, ly, tw + 10, 22);
-      ctx.fillStyle = '#052e1e';
-      ctx.fillText(label, x1 + 5, ly + 16);
+      for (const loc of faces) {
+        const [x1, y1, x2, y2] = loc.bbox;
+        const rec     = lastRecogMap[loc.id] || {};
+        const name    = rec.name || rec.name_top1 || 'Unknown';
+        const isKnown = name !== 'Unknown';
+        const color   = isKnown ? '#10b981' : '#ef4444';
+
+        ctx.lineWidth   = 2;
+        ctx.strokeStyle = color;
+        ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+
+        ctx.font = '14px ui-sans-serif, system-ui';
+        const tw = ctx.measureText(name).width;
+        const ly = Math.max(0, y1 - 22);
+        ctx.fillStyle = color;
+        ctx.fillRect(x1, ly, tw + 10, 22);
+        ctx.fillStyle = '#fff';
+        ctx.fillText(name, x1 + 5, ly + 16);
+      }
+    } else {
+      setStatus('Camera is on (overlay hidden)', 'warn');
     }
 
     overlayRAF = requestAnimationFrame(drawOverlay);
   }
 
   // ---------- Camera ----------
-  function explainGetUserMediaError(e) {
-    const httpsHint =
-      location.hostname !== 'localhost' && location.protocol !== 'https:'
-        ? ' (Hint: use http://localhost:<port> on the machine running the server, or HTTPS when accessing via LAN IP).'
-        : '';
-    if (e && e.name) {
-      switch (e.name) {
-        case 'NotAllowedError':
-          return 'You denied camera permission.' + httpsHint;
-        case 'NotFoundError':
-          return 'No camera device found.';
-        case 'NotReadableError':
-          return 'The device is busy or blocked by the OS.';
-        case 'OverconstrainedError':
-          return 'Requested resolution is not supported by the camera.';
-        case 'SecurityError':
-          return 'Security policy blocked camera access.' + httpsHint;
-        default:
-          return `Camera error: ${e.name}.` + httpsHint;
-      }
-    }
-    return 'Unable to open the camera.' + httpsHint;
+  function explainCameraError(e) {
+    const hint = location.hostname !== 'localhost' && location.protocol !== 'https:'
+      ? ' (Dùng http://localhost:<port> hoặc HTTPS qua LAN.)' : '';
+    if (!e?.name) return 'Không mở được camera.' + hint;
+    return ({ NotAllowedError:  'Bạn từ chối quyền camera.' + hint,
+              NotFoundError:    'Không tìm thấy camera.',
+              NotReadableError: 'Camera đang bị chiếm bởi ứng dụng khác.',
+              SecurityError:    'Security policy chặn camera.' + hint })[e.name]
+           ?? `Lỗi camera: ${e.name}.` + hint;
   }
 
   async function startCamera() {
     if (streaming) return;
+    toggleCameraBtn.disabled = true;
     try {
-      toggleCameraBtn.disabled = true;
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { width: { ideal: 1280 }, height: { ideal: 720 } },
         audio: false,
       });
       video.srcObject = stream;
       await video.play();
+
+      if (!video.videoWidth) {
+        await new Promise(res => video.addEventListener('loadedmetadata', res, { once: true }));
+      }
+
+      syncCanvas();
+
+      // Khởi tạo capture canvas một lần duy nhất, tái sử dụng mãi
+      capCanvas = document.createElement('canvas');
+      capCanvas.width  = video.videoWidth;
+      capCanvas.height = video.videoHeight;
+      capCtx = capCanvas.getContext('2d', { willReadFrequently: false });
+
       streaming = true;
       toggleCameraBtn.disabled = false;
       toggleCameraBtn.textContent = 'Turn off camera';
       setPill('Connected', 'ok');
-      setStatus('Camera is on', 'ok');
+      setStatus('Waiting for frames…', 'warn');
+
       overlayRAF = requestAnimationFrame(drawOverlay);
-      frameRAF = requestAnimationFrame(tickSend);
+      // Dùng setInterval thay vì RAF để send frame đúng nhịp 120ms
+      // RAF bị throttle khi tab mất focus; setInterval vẫn chạy
+      startSendLoop();
     } catch (e) {
       toggleCameraBtn.disabled = false;
       setPill('Camera error', 'err');
-      setStatus(explainGetUserMediaError(e), 'err');
-      setDebug('getUserMedia error: ' + (e && e.message ? e.message : e), 'err');
-      console.error(e);
+      setStatus(explainCameraError(e), 'err');
+      setDebug('getUserMedia: ' + (e?.message ?? e), 'err');
     }
   }
 
   function stopCamera() {
     streaming = false;
-    if (frameRAF) cancelAnimationFrame(frameRAF), (frameRAF = null);
     if (overlayRAF) cancelAnimationFrame(overlayRAF), (overlayRAF = null);
-    const so = video.srcObject;
-    if (so) {
-      so.getTracks().forEach((t) => t.stop());
-      video.srcObject = null;
-    }
+    stopSendLoop();
+    video.srcObject?.getTracks().forEach(t => t.stop());
+    video.srcObject = null;
+    capCanvas = null; capCtx = null;
+    lastLocs = []; lastRecogMap = {};
     toggleCameraBtn.textContent = 'Turn on camera';
     setPill('Off', 'warn');
     setStatus('Camera is off', 'warn');
     ctx.clearRect(0, 0, canvas.width, canvas.height);
   }
 
-  // ---------- WS frame loop ----------
-  function sendFrame() {
-    if (!ws || ws.readyState !== 1 || !streaming) return;
-    const cap = document.createElement('canvas');
-    cap.width = video.videoWidth || canvas.width;
-    cap.height = video.videoHeight || canvas.height;
-    const cctx = cap.getContext('2d');
-    cctx.drawImage(video, 0, 0, cap.width, cap.height);
-    srcW = cap.width;
-    srcH = cap.height;
-    const dataURL = cap.toDataURL('image/jpeg', 0.8);
-    try {
-      ws.send(dataURL);
-    } catch (e) {
-      setDebug('WS send error: ' + e, 'err');
-    }
+  // ---------- WS send loop ----------
+  let _sendTimer = null;
+
+  function startSendLoop() {
+    if (_sendTimer) return;
+    _sendTimer = setInterval(sendFrame, SEND_INTERVAL_MS);
   }
 
-  function tickSend(ts) {
-    if (!streaming) return;
-    if (!lastSend || ts - lastSend >= SEND_INTERVAL_MS) {
-      sendFrame();
-      lastSend = ts || performance.now();
-    }
-    frameRAF = requestAnimationFrame(tickSend);
+  function stopSendLoop() {
+    if (_sendTimer) clearInterval(_sendTimer), (_sendTimer = null);
+  }
+
+  function sendFrame() {
+    if (!ws || ws.readyState !== 1 || !streaming || !video.videoWidth || !capCtx) return;
+    // Tái sử dụng capCanvas — không allocate DOM element mới mỗi frame
+    capCtx.drawImage(video, 0, 0, capCanvas.width, capCanvas.height);
+    try { ws.send(capCanvas.toDataURL('image/jpeg', 0.75)); }
+    catch (e) { setDebug('WS send error: ' + e, 'err'); }
   }
 
   // ---------- WebSocket ----------
   function connectWS() {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const url = `${proto}//${location.host}/ws`;
-    setDebug('Connecting WS: ' + url, 'warn');
+    const url   = `${proto}//${location.host}/ws`;
+    setDebug('Connecting: ' + url, 'warn');
     try {
       ws = new WebSocket(url);
-      ws.onopen = () => {
-        setPill('WS connected', 'ok');
-        setDebug('WS open', 'ok');
-      };
-      ws.onclose = () => {
-        setPill('WS disconnected', 'err');
-        setDebug('WS close', 'err');
-        if (streaming) setStatus('Camera on, WS disconnected', 'warn');
-      };
-      ws.onerror = (ev) => {
-        setPill('WS error', 'err');
-        setDebug('WS error', 'err');
-        console.error(ev);
-      };
+      ws.onopen  = ()  => { setPill('WS connected', 'ok');     setDebug('WS open', 'ok'); };
+      ws.onclose = ()  => { setPill('WS disconnected', 'err'); setDebug('WS closed', 'err'); };
+      ws.onerror = (e) => { setPill('WS error', 'err');         setDebug('WS error', 'err'); console.error(e); };
       ws.onmessage = (ev) => {
         let m;
-        try {
-          m = JSON.parse(ev.data);
-        } catch {
-          return;
-        }
+        try { m = JSON.parse(ev.data); } catch { return; }
         if (m.type === 'frame_result') {
-          if (Array.isArray(m.locs)) lastLocs = m.locs;
-          recogMap = m.data || {};
+          lastLocs     = Array.isArray(m.locs) ? m.locs : [];
+          lastRecogMap = m.data || {};
         } else if (m.type === 'config') {
           const cfg = m.data || {};
           if ('show_bbox' in cfg) {
             overlayOn = !!cfg.show_bbox;
             if (overlayChk) overlayChk.checked = overlayOn;
-            setDebug('Overlay updated from server -> ' + overlayOn, overlayOn ? 'ok' : 'warn');
           }
-        } else if (m.type === 'infer_status') {
-          // optional spinner here
         }
       };
     } catch (e) {
-      setDebug('WS connect exception: ' + e, 'err');
+      setDebug('WS exception: ' + e, 'err');
     }
   }
 
   // ---------- UI bindings ----------
-  toggleCameraBtn.addEventListener('click', () => {
-    if (streaming) stopCamera();
-    else startCamera();
-  });
+  toggleCameraBtn.addEventListener('click', () => streaming ? stopCamera() : startCamera());
 
   overlayChk.addEventListener('change', async () => {
     overlayOn = overlayChk.checked;
@@ -262,59 +210,39 @@ document.addEventListener('DOMContentLoaded', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ show_bbox: overlayOn, show_label: overlayOn }),
       });
-      setDebug('Overlay config sent -> ' + overlayOn, overlayOn ? 'ok' : 'warn');
-      if (streaming) {
-        setStatus(overlayOn ? 'Overlay enabled' : 'Overlay disabled', overlayOn ? 'ok' : 'warn');
-      }
-    } catch (e) {
-      setDebug('Overlay config error: ' + e, 'err');
-      setStatus('Overlay update failed', 'err');
-    }
+    } catch (e) { setDebug('Config error: ' + e, 'err'); }
   });
 
   reloadFacebankBtn.addEventListener('click', async () => {
     reloadFacebankBtn.disabled = true;
     try {
       const res = await fetch('/reload-facebank', { method: 'POST' });
-      const js = await res.json();
+      const js  = await res.json();
       setStatus((js.status === 'success' ? 'Facebank: ' : 'Error: ') + (js.message || ''),
                 js.status === 'success' ? 'ok' : 'err');
-      setDebug('Reload facebank -> ' + (js.status || 'unknown'),
-               js.status === 'success' ? 'ok' : 'err');
-    } catch (e) {
-      setStatus('Reload error: ' + e, 'err');
-      setDebug('Reload error: ' + e, 'err');
-    } finally {
-      reloadFacebankBtn.disabled = false;
-    }
+    } catch (e) { setStatus('Reload error: ' + e, 'err'); }
+    finally { reloadFacebankBtn.disabled = false; }
   });
 
   window.addEventListener('beforeunload', () => {
-    try { if (ws) ws.close(); } catch {}
+    try { ws?.close(); }  catch {}
     try { stopCamera(); } catch {}
   });
 
   // ---------- Bootstrap ----------
   (async () => {
-    overlayOn = overlayChk ? overlayChk.checked : true;
     setPill('Connecting WS...', 'warn');
     setStatus('Ready.', 'warn');
-    await bootstrapConfig();
+    try {
+      const res = await fetch('/config');
+      const js  = await res.json();
+      if (js?.config && 'show_bbox' in js.config) {
+        overlayOn = !!js.config.show_bbox;
+        if (overlayChk) overlayChk.checked = overlayOn;
+      }
+    } catch {}
     connectWS();
     setDebug('Ready. Click "Turn on camera" to start.', 'warn');
   })();
 
-  async function bootstrapConfig() {
-    try {
-      const res = await fetch('/config');
-      const js = await res.json();
-      if (js && js.config) {
-        const cfg = js.config;
-        if ('show_bbox' in cfg) {
-          overlayOn = !!cfg.show_bbox;
-          if (overlayChk) overlayChk.checked = overlayOn;
-        }
-      }
-    } catch (e) { /* ignore */ }
-  }
 });
