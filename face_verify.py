@@ -364,9 +364,12 @@ class FaceVerificationApp:
             for idx, bbox in enumerate(bboxes_draw):
                 face_locations.append({"id": f"face_{idx}", "bbox": bbox.tolist()})
 
-            tgt               = self._targets_on_device()
-            results, distances = learner.infer(conf, faces, tgt, getattr(conf, "tta", False))
+            tgt = self._targets_on_device()
+            # torch.no_grad(): bỏ tính gradient không cần thiết khi inference
+            with torch.no_grad():
+                results, distances = learner.infer(conf, faces, tgt, getattr(conf, "tta", False))
 
+            thr = float(learner.threshold)
             for idx, _ in enumerate(bboxes_draw):
                 face_id = f"face_{idx}"
 
@@ -379,22 +382,19 @@ class FaceVerificationApp:
                             else -1)
 
                 name_top1  = self._idx_to_name(idx_thr) if idx_thr >= 0 else "Unknown"
-                passed     = idx_thr >= 0 and distance <= float(learner.threshold)
+                passed     = idx_thr >= 0 and distance <= thr
                 name       = name_top1 if passed else "Unknown"
-                confidence = max(0.0, 1.0 - distance / (float(learner.threshold) * 2.0))
+                confidence = max(0.0, 1.0 - distance / (thr * 2.0))
 
                 recognition_data[face_id] = {
                     "name":             name,
-                    "distance":         distance,
+                    "distance":         round(distance, 3),
                     "passed_threshold": passed,
                     "name_top1":        name_top1,
-                    "threshold":        float(learner.threshold),
-                    "confidence":       confidence,
+                    "threshold":        thr,
+                    "confidence":       round(confidence, 3),
                 }
-
-                print(f"[recognize] {name_top1} | dist={distance:.3f} "
-                      f"| thr={learner.threshold:.3f} "
-                      f"| {'PASSED' if passed else 'not passed'}")
+                # print đã bị bỏ — stdout flush mỗi frame là bottleneck lớn
 
             self._log_and_store(recognition_data)
 
