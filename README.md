@@ -84,7 +84,6 @@ This will save the trained model in the `work_dirs/res50_custom_onegpu/` directo
 If you don't want to train a model from scratch, you can download pretrained models.
 ```bash
 pip install huggingface_hub
-
 ```
 Then, use the following Python script to download the model:
 ```python
