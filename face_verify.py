@@ -103,9 +103,7 @@ def reload_facebank() -> Tuple[bool, str]:
                 f"Put images into subfolders, e.g. {str(arch_dir)}/<PersonName>/*.jpg"
             )
         targets, names = t, n
-        msg = (f"Facebank updated: {len(names)} identities, "
-               f"{0 if t.numel()==0 else t.shape[0]} embeddings "
-               f"at {_facebank_file(conf, learner.model)}")
+        msg = f"Facebank updated: {len(names)} identities"
         return True, msg
     except Exception as e:
         return False, f"Reload facebank failed: {e}"

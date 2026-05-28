@@ -14,7 +14,7 @@ Create and activate the environment with **conda**:
 conda create -n face_recog python=3.8.13 -y
 conda activate face_recog
 
-python.exe -m pip install --upgrade pip 
+pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
@@ -84,6 +84,7 @@ This will save the trained model in the `work_dirs/res50_custom_onegpu/` directo
 If you don't want to train a model from scratch, you can download pretrained models.
 ```bash
 pip install huggingface_hub
+
 ```
 Then, use the following Python script to download the model:
 ```python
