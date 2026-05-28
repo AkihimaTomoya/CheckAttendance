@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>EduTrack - Phòng học</title>
+  <link rel="stylesheet" href="/static/css/style.css" />
+</head>
+<body class="page-student">
+  <nav class="top-nav">
+    <div class="nav-brand"><span class="nav-logo">🎓</span><span class="nav-title">EduTrack</span></div>
+    <div class="nav-right">
+      <span class="live-dot"></span><span style="font-size:11px;font-weight:700;color:var(--ok);margin-right:6px">LIVE</span>
+      <span id="navStudentName" class="nav-user" style="margin-right: 10px;">Đang tải...</span>
+      <button id="logoutBtn" class="btn-text-danger" style="margin-left: 10px;">Đăng xuất</button>
+    </div>
+  </nav>
+
+  <div class="att-bar">
+    <span id="attStatus" class="att-status muted">⏸ Camera đang tắt</span>
+    <span id="attDuration" class="att-duration" style="margin-left: 20px;"></span>
+  </div>
+
+  <div class="container" style="margin-top: 20px;">
+    <header class="app-header">
+      <div class="brand"><h1>Camera Điểm Danh</h1></div>
+      <div class="toolbar">
+        <label class="row chk toggle" title="Hiển thị khung nhận diện" style="margin-right: 10px;">
+          <input id="overlayChk" type="checkbox" checked />
+        </label>
+        <button id="toggleCameraBtn" type="button" class="btn">Bật Camera</button>
+      </div>
+    </header>
+    <section class="media">
+      <video id="videoStream" autoplay muted playsinline></video>
+      <canvas id="canvasOverlay"></canvas>
+    </section>
+  </div>
+  <script src="/static/js/attendance.js"></script>
+  <script src="/static/js/student.js"></script>
+</body>
+</html>

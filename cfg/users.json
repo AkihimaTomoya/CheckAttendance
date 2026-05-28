@@ -1,0 +1,19 @@
+{
+  "admin": {
+    "password": "admin123",
+    "role": "admin",
+    "display_name": "Administrator"
+  },
+  "SV001": {
+    "password": "sv001",
+    "role": "student",
+    "display_name": "Nguyễn Văn An",
+    "face_name": "An"
+  },
+  "SV002": {
+    "password": "sv002",
+    "role": "student",
+    "display_name": "Trần Ngọc Đức Anh",
+    "face_name": "DA"
+  }
+}

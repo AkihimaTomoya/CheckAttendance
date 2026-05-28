@@ -4,6 +4,7 @@ import pickle
 
 import mxnet as mx
 import numpy as np
+np.bool = np.bool_  # Fix for deprecated np.bool in newer NumPy versions
 import sklearn
 import torch
 from mxnet import ndarray as nd

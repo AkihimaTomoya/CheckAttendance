@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Đăng nhập - EduTrack</title>
+  <link rel="stylesheet" href="/static/css/style.css"/>
+</head>
+<body class="page-login">
+  <div class="login-body">
+    <div class="login-wrap">
+      <div class="login-card">
+        <div class="login-logo" style="text-align: center;">🎓</div>
+        <h1 class="login-title" style="text-align: center;">EduTrack</h1>
+        <p class="login-sub" style="text-align: center;">Hệ thống điểm danh nhận diện khuôn mặt</p>
+
+        <form id="loginForm">
+          <div class="lf-field">
+            <label>Tài khoản</label>
+            <input type="text" id="username" placeholder="Nhập tài khoản (VD: admin, SV001)" required />
+          </div>
+          <div class="lf-field">
+            <label>Mật khẩu</label>
+            <input type="password" id="password" placeholder="Nhập mật khẩu" required />
+          </div>
+          <button type="submit" class="btn" style="width: 100%; margin-top: 10px;">Đăng nhập</button>
+        </form>
+        <div id="loginError" style="color: red; font-size: 13px; margin-top: 10px; text-align: center;"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/js/attendance.js"></script>
+  <script>
+    document.getElementById('loginForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const u = document.getElementById('username').value;
+      const p = document.getElementById('password').value;
+      const errBox = document.getElementById('loginError');
+      errBox.textContent = "Đang xử lý...";
+
+      const res = await ATT.login(u, p);
+
+      if (res && res.status === 'ok') {
+        ATT.setSession(res.user);
+        location.href = res.user.role === 'admin' ? '/admin' : '/student';
+      } else {
+        errBox.textContent = res ? res.message : "Lỗi kết nối server!";
+      }
+    });
+  </script>
+</body>
+</html>

@@ -1,4 +1,5 @@
 import numpy as np
+from typing import Optional
 from PIL import Image
 from ultralytics_custom import YOLO
 
@@ -40,7 +41,7 @@ class FaceDetector:
         ny2 = int(min(img_h, cy + side / 2))
         return nx1, ny1, nx2, ny2
 
-    def detect_faces(self, image, min_face_size: float = 20.0, conf_th: float | None = None, iou_th: float | None = None):
+    def detect_faces(self, image, min_face_size: float = 20.0, conf_th: Optional[float] = None, iou_th: Optional[float] = None):
         """
         Returns:
             bounding_boxes: np.ndarray of shape (N, 5) with [x1, y1, x2, y2, score]
@@ -108,7 +109,7 @@ class FaceDetector:
             return None
         return Image.fromarray(face).resize((112, 112))
 
-    def align_multi(self, img, limit: int | None = None, min_face_size: float = 30.0):
+    def align_multi(self, img, limit: Optional[int] = None, min_face_size: float = 30.0):
         """
         Returns:
             (boxes (N,5), faces: list[PIL.Image 112x112]) or None if no faces.

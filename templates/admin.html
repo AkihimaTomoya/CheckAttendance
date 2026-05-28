@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>EduTrack - Admin</title>
+  <link rel="stylesheet" href="/static/css/style.css"/>
+</head>
+<body class="page-admin">
+  <nav class="top-nav">
+    <div class="nav-brand"><span class="nav-logo">🎓</span><span class="nav-title">EduTrack Admin</span></div>
+    <div class="nav-right">
+      <span class="live-dot"></span><span style="font-size:11px;font-weight:700;color:var(--ok);margin-right:6px">LIVE</span>
+      <button id="logoutBtn" class="btn-text-danger">Đăng xuất</button>
+    </div>
+  </nav>
+
+  <div class="adm-wrap">
+    <div class="adm-grid" style="grid-template-columns: 1fr 300px;">
+
+      <div class="adm-card">
+        <div class="adm-card-hdr"><h2>📊 Điểm danh Real-time</h2></div>
+        <div style="overflow-x:auto">
+          <table>
+            <thead><tr><th>Học sinh</th><th>Trạng thái</th><th>Vào lớp</th><th>Tổng vắng</th><th>Hành động</th></tr></thead>
+            <tbody id="attendanceBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="adm-sidebar" style="display: flex; flex-direction: column; gap: 16px;">
+
+        <div class="adm-card" style="padding: 16px;">
+          <h3 style="margin-bottom: 12px; border-bottom: 1px solid var(--border); padding-bottom: 8px;">➕ Thêm SV Mới</h3>
+          <form id="addStudentForm" style="display: flex; flex-direction: column; gap: 10px;">
+            <input type="text" id="newUid" placeholder="Mã SV (VD: SV004)" required style="padding: 8px; border: 1px solid var(--border);">
+            <input type="text" id="newName" placeholder="Họ và Tên" required style="padding: 8px; border: 1px solid var(--border);">
+            <input type="text" id="newFaceName" placeholder="Tên Facebank" required style="padding: 8px; border: 1px solid var(--border);">
+            <input type="password" id="newPassword" placeholder="Mật khẩu" required style="padding: 8px; border: 1px solid var(--border);">
+            <button type="submit" class="btn">Lưu vào DB</button>
+          </form>
+          <div id="addResultMsg" style="margin-top: 10px; font-size: 13px; font-weight: bold;"></div>
+        </div>
+
+        <div class="adm-card" style="padding: 16px;">
+          <h3 style="margin-bottom: 12px; border-bottom: 1px solid var(--border); padding-bottom: 8px;">🧠 Facebank</h3>
+          <p style="font-size:12px; color:var(--muted); margin-bottom:10px;">Cập nhật lại dữ liệu khuôn mặt sau khi tạo thêm thư mục ảnh cho sinh viên mới.</p>
+          <button id="reloadFacebankBtn" class="btn secondary" style="width: 100%;">Tải lại Facebank</button>
+          <div id="fbResultMsg" style="margin-top: 10px; font-size: 13px; font-weight: bold; text-align: center;"></div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+  <script src="/static/js/attendance.js"></script>
+  <script src="/static/js/admin.js"></script>
+</body>
+</html>

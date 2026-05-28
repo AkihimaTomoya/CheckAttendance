@@ -1,0 +1,9 @@
+{
+  "course_id":              "CS101",
+  "course_name":            "Advanced Web Programming",
+  "class_name":             "K24A",
+  "class_start":            "22:00",
+  "class_end":              "22:40",
+  "absence_alert_minutes":  2,
+  "heartbeat_interval_sec": 30
+}

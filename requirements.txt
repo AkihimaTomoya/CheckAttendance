@@ -1,7 +1,7 @@
-#python 3.10+
-Cython>=0.29.28
-cmake>=3.22.3    
-numpy==1.23.5
+#python 3.8+
+Cython
+cmake
+numpy
 torch
 torchvision
 tensorboardx
@@ -13,7 +13,7 @@ scipy
 tqdm
 scikit-learn
 matplotlib
-mxnet==2.0.0b1
+mxnet
 psutil
 mediapipe
 uvicorn[standard]

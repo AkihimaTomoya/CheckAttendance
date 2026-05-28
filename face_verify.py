@@ -1,10 +1,6 @@
-import csv
-import threading
 import time
-from collections import deque
-from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Optional
 
 import cv2
 import torch
@@ -17,157 +13,6 @@ from utils.utils_facebank import (
 )
 
 # ──────────────────────────────────────────────────────────────
-#  PresenceLogger
-#  Toàn bộ logic theo dõi / CSV nằm ở đây.
-#  fastapi-app.py không cần biết gì về CSV.
-# ──────────────────────────────────────────────────────────────
-
-class PresenceLogger:
-    """
-    Theo dõi sự hiện diện từng người qua các frame.
-
-    Chống nhiễu camera bằng sliding-window:
-      - Chỉ xác nhận "xuất hiện"  khi tên PASSED liên tiếp >= CONFIRM_FRAMES
-      - Chỉ xác nhận "biến mất"   khi PASSED = 0 liên tiếp  >= ABSENT_FRAMES
-      Điều này loại trừ trường hợp 1 frame Unknown xen giữa nhiều frame PASSED.
-
-    Vắng mặt > ABSENCE_ALERT_MINUTES => cột absence_alert = True trong CSV.
-    """
-
-    CONFIRM_FRAMES        = 4    # frame PASSED liên tiếp để coi là "xuất hiện"
-    ABSENT_FRAMES         = 8    # frame không-PASSED liên tiếp để coi là "biến mất"
-    ABSENCE_ALERT_MINUTES = 30   # ngưỡng gắn cờ absent_alert
-
-    # Cột CSV
-    _HEADERS = [
-        "name",
-        "event_type",        # "appeared" | "disappeared"
-        "datetime",
-        "timestamp",
-        "absence_alert",     # True nếu khoảng vắng > 30 phút (chỉ có ở "disappeared")
-        "absence_minutes",   # thời gian vắng mặt tính bằng phút  (chỉ có ở "disappeared")
-    ]
-
-    def __init__(self, log_dir: str = "logs"):
-        self._log_path = Path(log_dir) / "presence_log.csv"
-        self._log_path.parent.mkdir(parents=True, exist_ok=True)
-
-        self._lock = threading.Lock()
-
-        # Khởi tạo file CSV (chỉ ghi header nếu chưa có)
-        if not self._log_path.exists():
-            with open(self._log_path, "w", newline="", encoding="utf-8") as f:
-                csv.DictWriter(f, fieldnames=self._HEADERS).writeheader()
-
-        # Trạng thái mỗi người:
-        #   "window"      : deque[bool]  — lịch sử PASSED/không-PASSED gần nhất
-        #   "is_present"  : bool
-        #   "appeared_at" : float | None — timestamp lúc xác nhận xuất hiện
-        #   "last_seen"   : float | None — timestamp frame PASSED cuối cùng
-        self._state: Dict[str, dict] = {}
-
-    # ── public API ────────────────────────────────────────────
-
-    def update(self, recognition_data: Dict[str, Any]) -> None:
-        """
-        Gọi sau mỗi frame được infer.
-        recognition_data = dict trả về từ recognize_faces_and_locs().
-        """
-        now = time.time()
-
-        # Tập hợp tên PASSED trong frame này (bỏ Unknown)
-        passed_names: set = set()
-        for rec in recognition_data.values():
-            if rec.get("passed_threshold") and rec.get("name", "Unknown") != "Unknown":
-                passed_names.add(rec["name"])
-
-        with self._lock:
-            # Cập nhật window cho tất cả người đã biết + người mới
-            all_names = passed_names | {n for n, s in self._state.items() if s["is_present"]}
-
-            for name in all_names:
-                s = self._get_state(name)
-                seen_this_frame = (name in passed_names)
-
-                if seen_this_frame:
-                    s["last_seen"] = now
-
-                s["window"].append(seen_this_frame)
-
-                if not s["is_present"]:
-                    # Kiểm tra xác nhận "xuất hiện"
-                    if self._all_true_recent(s["window"], self.CONFIRM_FRAMES):
-                        s["is_present"]  = True
-                        s["appeared_at"] = now
-                        self._write_row(name, "appeared", now)
-                else:
-                    # Kiểm tra xác nhận "biến mất"
-                    if self._all_false_recent(s["window"], self.ABSENT_FRAMES):
-                        s["is_present"] = False
-                        absence_minutes = self._absence_minutes(s["appeared_at"], s["last_seen"])
-                        alert           = absence_minutes is not None and absence_minutes >= self.ABSENCE_ALERT_MINUTES
-                        self._write_row(
-                            name, "disappeared", s["last_seen"] or now,
-                            absence_minutes=absence_minutes,
-                            absence_alert=alert,
-                        )
-
-    @property
-    def csv_path(self) -> str:
-        return str(self._log_path)
-
-    # ── internal helpers ──────────────────────────────────────
-
-    def _get_state(self, name: str) -> dict:
-        if name not in self._state:
-            self._state[name] = {
-                "window":      deque(maxlen=max(self.CONFIRM_FRAMES, self.ABSENT_FRAMES) + 2),
-                "is_present":  False,
-                "appeared_at": None,
-                "last_seen":   None,
-            }
-        return self._state[name]
-
-    @staticmethod
-    def _all_true_recent(window: deque, n: int) -> bool:
-        """Kiểm tra n phần tử cuối đều True."""
-        tail = list(window)[-n:]
-        return len(tail) == n and all(tail)
-
-    @staticmethod
-    def _all_false_recent(window: deque, n: int) -> bool:
-        """Kiểm tra n phần tử cuối đều False."""
-        tail = list(window)[-n:]
-        return len(tail) == n and not any(tail)
-
-    @staticmethod
-    def _absence_minutes(appeared_at: float, last_seen: float) -> float | None:
-        if appeared_at is None or last_seen is None:
-            return None
-        duration_sec = max(0.0, last_seen - appeared_at)
-        return round(duration_sec / 60, 2)
-
-    def _write_row(
-        self,
-        name: str,
-        event_type: str,
-        ts: float,
-        absence_minutes: float | None = None,
-        absence_alert: bool = False,
-    ) -> None:
-        row = {
-            "name":            name,
-            "event_type":      event_type,
-            "datetime":        datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S"),
-            "timestamp":       round(ts, 3),
-            "absence_alert":   absence_alert   if event_type == "disappeared" else "",
-            "absence_minutes": absence_minutes if event_type == "disappeared" else "",
-        }
-        with open(self._log_path, "a", newline="", encoding="utf-8") as f:
-            csv.DictWriter(f, fieldnames=self._HEADERS).writerow(row)
-
-
-# ──────────────────────────────────────────────────────────────
 #  Module state
 # ──────────────────────────────────────────────────────────────
 conf    = None
@@ -175,8 +20,6 @@ yolo    = None
 learner = None
 targets = torch.empty(0)
 names: Dict[int, str] = {}
-
-_presence_logger: PresenceLogger | None = None
 
 # ── Runtime setters/getters ───────────────────────────────────
 
@@ -206,7 +49,7 @@ def _need_rebuild_facebank(embs: torch.Tensor) -> bool:
 
 
 def initialize(cfg, update_facebank: bool = False) -> None:
-    global conf, yolo, learner, targets, names, _presence_logger
+    global conf, yolo, learner, targets, names
 
     conf = cfg
     if not hasattr(conf, "device"):
@@ -242,10 +85,6 @@ def initialize(cfg, update_facebank: bool = False) -> None:
             t = t.to(conf.device).float()
 
     targets, names = t, n
-
-    # Khởi tạo logger (log_dir có thể override qua conf nếu cần)
-    log_dir = str(getattr(conf, "log_dir", "logs"))
-    _presence_logger = PresenceLogger(log_dir=log_dir)
 
 
 def reload_facebank() -> Tuple[bool, str]:
@@ -333,7 +172,8 @@ class FaceVerificationApp:
 
     def recognize_faces_and_locs(self, frame) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         """
-        Nhận dạng khuôn mặt, cập nhật presence logger, trả về kết quả cho caller.
+        Nhận dạng khuôn mặt và trả về kết quả cho caller.
+        Không chứa logic ghi file CSV.
 
         Returns
         -------
@@ -351,12 +191,10 @@ class FaceVerificationApp:
                                      getattr(conf, "face_limit", 10),
                                      getattr(conf, "min_face_size", 30))
             if res is None:
-                self._log_and_store(recognition_data)
                 return face_locations, recognition_data
 
             bboxes, faces = res
             if faces is None or len(faces) == 0:
-                self._log_and_store(recognition_data)
                 return face_locations, recognition_data
 
             bboxes_draw = bboxes[:, :4].astype(int)
@@ -394,22 +232,10 @@ class FaceVerificationApp:
                     "threshold":        thr,
                     "confidence":       round(confidence, 3),
                 }
-                # print đã bị bỏ — stdout flush mỗi frame là bottleneck lớn
 
-            self._log_and_store(recognition_data)
+            self.last_recognition_results = recognition_data
 
         except Exception:
-            self._log_and_store(recognition_data)
+            pass
 
         return face_locations, recognition_data
-
-    # ── internal ─────────────────────────────────────────────
-
-    def _log_and_store(self, recognition_data: Dict[str, Any]) -> None:
-        """Cập nhật presence logger và lưu kết quả cuối."""
-        self.last_recognition_results = recognition_data
-        if _presence_logger is not None:
-            try:
-                _presence_logger.update(recognition_data)
-            except Exception:
-                pass

@@ -6,6 +6,7 @@ from typing import Iterable
 
 import mxnet as mx
 import numpy as np
+np.bool = np.bool_
 import torch
 from functools import partial
 from torch import distributed
