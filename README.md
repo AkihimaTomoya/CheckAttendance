@@ -14,7 +14,7 @@ Create and activate the environment with **conda**:
 conda create -n face_recog python=3.8.13 -y
 conda activate face_recog
 
-pip install --upgrade pip
+python.exe -m pip install --upgrade pip 
 pip install -r requirements.txt
 ```
 
